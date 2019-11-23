@@ -3,8 +3,10 @@ module Adapode
 #   This file is part of Aadapode.jl. It is licensed under the GPL license
 #   Adapode Copyright (C) 2019 Michael Reed
 
-using Grassmann
+using StaticArrays, Grassmann
 import Grassmann: value, vector, valuetype
+
+export Lorenz, odesolve
 
 function Lorenz(t::T) where T<:TensorAlgebra{V} where V
     t,x = promote_type(valuetype(t),Float64),Chain(vector(t))
@@ -67,12 +69,14 @@ function predictor_corrector!(F,x,h,m,Fx,cp,cc)
         s += cc[k]*Fx[j]
     end
     xout = x+h*s
-    return xout, maximum(abs.((xout-y)./xout)), mp1
+    return xout, maximum(abs.(value(xout-y)./value(xout))), mp1
 end
 
-function OdeSolveSystem(F,x0,a,b,tol,mode)
+function odesolve(F,x0::T,B=(0,2π),tol=15,mode=15) where T<:TensorAlgebra{V} where V
+    a,b = B
     h = 2.0^-tol
-    N = (b-a)*2^tol
+    N = Int(round((b-a)*2^tol))
+    eqc = ndims(V)
     emax = 1e1^-tol
     emin = 1e1^(-tol-3)
     hmin = 1e-16
@@ -123,7 +127,7 @@ function OdeSolveSystem(F,x0,a,b,tol,mode)
         while i ≤ itmax
             i = i + 1
             x = Y[i]
-            h = checkfinalstep(x[1],b,h,iflag)
+            h,iflag = checkfinalstep(x[1],b,h,iflag)
             resize_array!(Y,i,10000)
             Y[i+1],e = adaptive_method(F,x,h,m,brs,c,ce)
             iflag == 0 && break
@@ -175,7 +179,7 @@ function OdeSolveSystem(F,x0,a,b,tol,mode)
         while i ≤ itmax
             i += 1
             x = Y[i]
-            checkfinalstep(x[1],b,h,iflag)
+            h,iflag = checkfinalstep(x[1],b,h,iflag)
             resize_array!(Y,i+mm,10000)
             if initialize == 0
                 for j ∈ 1:mm-1
@@ -191,12 +195,12 @@ function OdeSolveSystem(F,x0,a,b,tol,mode)
             iflag == 0 && break
             if e < emin
                 h *= 2
-                i -= ceil(mm/2)
+                i -= Int(ceil(mm/2))
                 initialize = 0
             end
             if e > emax
                 h /= 2
-                i -= ceil(mm/2)
+                i -= Int(ceil(mm/2))
                 initialize = 0
             end
             h = checkhsize(h,hmin,hmax)
@@ -222,7 +226,7 @@ function checkfinalstep(a,b,h,iflag)
         iflag = 0
         h = copysign(d,h)
     end
-    return h
+    return h,iflag
 end
 
 show_progress(x,i,b) = i%75000 == 11 && println(x[1]," out of ",b)
