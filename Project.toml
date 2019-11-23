@@ -1,0 +1,8 @@
+name = "Adapode"
+uuid = "0750cfb5-909a-49d7-927e-29b6595444bf"
+authors = ["Michael Reed"]
+version = "0.1.0"
+
+[deps]
+Grassmann = "4df31cd9-4c27-5bea-88d0-e6a7146666d8"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
