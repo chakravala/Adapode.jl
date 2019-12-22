@@ -10,7 +10,7 @@ export Lorenz, odesolve
 
 function Lorenz(t::T) where T<:TensorAlgebra{V} where V
     t,x = promote_type(valuetype(t),Float64),Chain(vector(t))
-    Chain{t,V,1}(SVector(1.0,10.0(x[3]-x[2]),x[2]*(28.0-x[4])-x[3],x[2]*x[3]-(8/3)*x[4]))
+    Chain{V,1,t}(SVector(1.0,10.0(x[3]-x[2]),x[2]*(28.0-x[4])-x[3],x[2]*x[3]-(8/3)*x[4]))
 end
 
 include("constants.jl")
@@ -82,7 +82,7 @@ function odesolve(F,x0::T,B=(0,2π),tol=15,mode=15) where T<:TensorAlgebra{V} wh
     hmin = 1e-16
     hmax = 1e-4
     itmax = 5^(tol+5)
-    Y = Vector(undef,N+1)
+    Y = Vector{Chain{V,1,Float64,eqc}}(undef,N+1)
     Y[1] = x0 # Set initial conditions
     if mode ≤ 3
         if mode == 1 # Explicit Euler Method
@@ -204,7 +204,7 @@ function odesolve(F,x0::T,B=(0,2π),tol=15,mode=15) where T<:TensorAlgebra{V} wh
                 initialize = 0
             end
             h = checkhsize(h,hmin,hmax)
-            #show_progress(x,i,b)
+            show_progress(x,i,b)
         end
         truncate_array!(Y,i)
     end
