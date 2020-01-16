@@ -8,4 +8,4 @@ Grassmann = "4df31cd9-4c27-5bea-88d0-e6a7146666d8"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 
 [compat]
-Grassmann = "0.4"
+Grassmann = ">=0.4"
