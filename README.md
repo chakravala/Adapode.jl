@@ -31,11 +31,11 @@ function BackwardEulerHeat1D()
     ξ = 0.5.-abs.(0.5.-x) # initial condition
     A = assemblestiffness(t) # assemble(t,1,2x)
     M,b = assemblemassfunction(t,2x).+assemblerobin(e,1e6,0,0)
-    LHS = M+h*A; h = Float64(T.step) # time step
+    h = Float64(T.step); LHS = M+h*A # time step
     for l ∈ 1:m
         ξ = LHS\(M*ξ+h*b); l%10==0 && println(l*h)
     end
-	mesh(t,color=ξ)
+    mesh(t,color=ξ)
 end
 ```
 More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources. These methods can automatically generalize to higher dimensional manifolds and is compatible with discrete differential geometry.
