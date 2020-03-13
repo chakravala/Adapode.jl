@@ -11,3 +11,14 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 AbstractTensors = "a8e43f4a-99b7-5565-8bf1-0165161caaea"
 
 [compat]
+julia = "1"
+AbstractTensors = "0.4"
+DirectSum = "0.5"
+Grassmann = "0.5"
+StaticArrays = "0"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

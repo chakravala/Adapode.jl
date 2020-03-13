@@ -23,9 +23,8 @@ mutable struct TimeStep{T}
     e::T
     i::Int
     s::Int
-    r::Bool
     function TimeStep(h,hmin=1e-16,hmax=1e-4,emin=10^(log2(h)-3),emax=10^log2(h))
-        checkstep!(new{typeof(h)}(h,hmin,hmax,emin,emax,(emin+emax)/2,1,0,true))
+        checkstep!(new{typeof(h)}(h,hmin,hmax,emin,emax,(emin+emax)/2,1,0))
     end
 end
 function checkstep!(t)
@@ -36,44 +35,44 @@ function checkstep!(t)
 end
 
 function weights(c,fx)
-    cfx = c[1]*fx[1]
+    @inbounds cfx = c[1]*fx[1]
     for k ∈ 2:length(c)
-        cfx += c[k]*fx[k]
+        @inbounds cfx += c[k]*fx[k]
     end
     return cfx
 end
-@pure shift(::Val{m},::Val{k}=Val{1}()) where {m,k} = SVector{m,Int}(k:m+k-1)
+@pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = SVector{m,Int}(k:m+k-1)
 @pure shift(M::Val{m},i) where {m,a} = ((shift(M,Val{0}()).+i).%(m+1)).+1
-explicit(x,h,c,fx) = (l=length(c);x+weights(h*c,l≠length(fx) ? fx[shift(Val{l}())] : fx))
-explicit(x,h,c,fx,i) = (l=length(c);weights(h*c,l≠length(fx) ? fx[shift(Val{l}(),i)] : fx))
+explicit(x,h,c,fx) = (l=length(c);x+weights(h*c,l≠length(fx) ? fx[shift(Val(l))] : fx))
+explicit(x,h,c,fx,i) = (l=length(c);weights(h*c,l≠length(fx) ? fx[shift(Val(l),i)] : fx))
 improved_heun(x,f,h) = (fx = f(x); x+(h/2)*(fx+f(x+h*fx)))
 
-@pure butcher(::Val{N},::Val{A}=Val{false}()) where {N,A} = A ? CBA[N] : CB[N]
-@pure blength(n::Val{N},a::Val{A}=Val{false}()) where {N,A} = Val{length(butcher(n,a))-A}()
-function butcher(x,f,h,v::Val{N}=Val{4}(),a::Val{A}=Val{false}()) where {N,A}
+@pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
+@pure blength(n::Val{N},a::Val{A}=Val(false)) where {N,A} = Val(length(butcher(n,a))-A)
+function butcher(x,f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A}
     b = butcher(v,a)
     n = length(b)-A
     T = typeof(x)
     fx = T<:Vector ? SizedVector{n,T}(undef) : MVector{n,T}(undef)
-    fx[1] = f(x)
+    @inbounds fx[1] = f(x)
     for k ∈ 2:n
-        fx[k] = f(explicit(x,h,b[k-1],fx))
+        @inbounds fx[k] = f(explicit(x,h,b[k-1],fx))
     end
     return fx
 end
-explicit(x,f,h,b::Val=Val{4}()) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
+explicit(x,f,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
 explicit(x,f,h,::Val{1}) = x+h*f(x)
 
-function multistep!(x,f,fx,t,K::Val{k}=Val{4}(),::Val{PC}=Val{false}()) where {k,PC}
-    fx[((t.s+k-1)%(k+1))+1] = f(x)
-    explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
+function multistep!(x,f,fx,t,K::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
+    @inbounds fx[((t.s+k-1)%(k+1))+1] = f(x)
+    @inbounds explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
 end
-function predictcorrect(x,f,fx,t,k::Val{m}=Val{4}()) where m
+function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
     xi = x[t.i]
     p = xi + multistep!(xi,f,fx,t,k)
     t.s = (t.s%(m+1))+1; t.i += 1
-    c = xi + multistep!(p,f,fx,t,k,Val{true}())
+    c = xi + multistep!(p,f,fx,t,k,Val(true))
 end
 function predictcorrect(x,f,fx,t,::Val{1})
     xi = x[t.i]
@@ -86,39 +85,39 @@ function initsteps(x0,t,tmin,tmax)
     x[1] = x0
     return x
 end
-function initsteps(x0,t,tmin,tmax,f,m::Val{o},B=Val{4}()) where o
+function initsteps(x0,t,tmin,tmax,f,m::Val{o},B=Val(4)) where o
     initsteps(x0,t,tmin,tmax), MVector{o+1,typeof(x0)}(undef)
 end
 
-function initsteps!(x,f,fx,t,B=Val{4}())
+function initsteps!(x,f,fx,t,B=Val(4))
     m = length(fx)-2
     xi = x[t.i]
     for j ∈ 1:m
-        fx[j] = f(xi)
+        @inbounds fx[j] = f(xi)
         xi = explicit(xi,f,t.h,B)
         x[t.i+j] = xi
     end
     t.i += m
 end
 
-function explicit!(x,f,t,B=Val{5}())
+function explicit!(x,f,t,B=Val(5))
     resize!(x,t.i,10000)
-    xi = x[t.i]
-    fx,b = butcher(xi,f,t.h,B,Val{true}()),butcher(B,Val{true}())
+    @inbounds xi = x[t.i]
+    fx,b = butcher(xi,f,t.h,B,Val(true)),butcher(B,Val(true))
     t.i += 1
-    x[t.i] = explicit(xi,t.h,b[end-1],fx)
-    t.e = maximum(abs.(t.h*value(b[end]⋅fx)))
+    @inbounds x[t.i] = explicit(xi,t.h,b[end-1],fx)
+    @inbounds t.e = maximum(abs.(t.h*value(b[end]⋅fx)))
 end
 
-function predictcorrect!(x,f,fx,t,B::Val{m}=Val{4}()) where m
+function predictcorrect!(x,f,fx,t,B::Val{m}=Val(4)) where m
     resize!(x,t.i+m,10000)
     iszero(t.s) && initsteps!(x,f,fx,t)
-    xi = x[t.i]
+    @inbounds xi = x[t.i]
     p = xi + multistep!(xi,f,fx,t,B)
     t.s = (t.s%(m+1))+1
-    c = xi + multistep!(p,f,fx,t,B,Val{true}())
+    c = xi + multistep!(p,f,fx,t,B,Val(true))
     t.i += 1
-    x[t.i] = c
+    @inbounds x[t.i] = c
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 function predictcorrect!(x,f,fx,t,::Val{1})
@@ -127,22 +126,22 @@ function predictcorrect!(x,f,fx,t,::Val{1})
     c = xi + t.h*f(p)
     t.i += 1
     resize!(x,t.i,10000)
-    x[t.i] = c
+    @inbounds x[t.i] = c
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 
-odesolve(f,x0,∂,tol,m,o) = odesolve(f,x0,∂,tol,Val{m}(),Val{o}())
-function odesolve(f,x0,tmin=0,tmax=2π,tol=15,::Val{m}=Val{1}(),B::Val{o}=Val{4}()) where {m,o}
+odesolve(f,x0,tmin,tmax,tol,m,o) = odesolve(f,x0,∂,tol,Val(m),Val(o))
+function odesolve(f,x0,tmin=0,tmax=2π,tol=15,::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     t = TimeStep(2.0^-tol)
     if m == 0 # Improved Euler, Heun's Method
         x = initsteps(x0,t,tmin,tmax)
         for i ∈ 2:length(x)
-            x[i] = improved_heun(x[i-1],f,t.h)
+            @inbounds x[i] = improved_heun(x[i-1],f,t.h)
         end
     elseif m == 1 # Singlestep
         x = initsteps(x0,t,tmin,tmax)
         for i ∈ 2:length(x)
-            x[i] = explicit(x[i-1],f,t.h,B)
+            @inbounds x[i] = explicit(x[i-1],f,t.h,B)
         end
     elseif m == 2 # Adaptive Singlestep
         x = initsteps(x0,t,tmin,tmax)
@@ -152,7 +151,7 @@ function odesolve(f,x0,tmin=0,tmax=2π,tol=15,::Val{m}=Val{1}(),B::Val{o}=Val{4}
     elseif m == 3 # Multistep
         x,fx = initsteps(x0,t,tmin,tmax,f,B)
         for i ∈ o+1:length(x)
-            x[i] = predictcorrect(x,f,fx,t,B)
+            @inbounds x[i] = predictcorrect(x,f,fx,t,B)
         end
     else # Adaptive Multistep
         x,fx = initsteps(x0,t,tmin,tmax,f,B)
@@ -163,7 +162,7 @@ function odesolve(f,x0,tmin=0,tmax=2π,tol=15,::Val{m}=Val{1}(),B::Val{o}=Val{4}
     return x
 end
 
-function timeloop!(x,t,tmax,::Val{m}=Val{1}()) where m
+function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
     if t.e < t.emin
         t.h *= 2
         t.i -= Int(floor(m/2))

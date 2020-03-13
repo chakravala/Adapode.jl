@@ -17,7 +17,7 @@ export assemble, submesh, detsimplex, iterable, callable, value, solvepoisson
 @inline callable(c::F) where F<:Function = c
 @inline callable(c) = x->c
 
-function assemblelocal!(M,mat,m,tk,::Val{N}) where N
+function assemblelocal!(M,mat::SMatrix{N,N},m,tk::SVector{N}) where N
     for i ∈ 1:N, j∈ 1:N
         M[tk[i],tk[j]] += mat[i,j]*m[1]
     end
@@ -25,10 +25,10 @@ end
 
 assembleglobal(M,t,m=detsimplex(t),c=1,v=0) = assembleglobal(M,t,iterable(t,m),iterable(t,c),iterable(t,v))
 function assembleglobal(M,t,m::T,c::C,v::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
-    p = points(t); np,n = length(p),Val{ndims(p)}()
+    p = points(t); np = length(p)
     A = spzeros(np,np) # allocate global matrix
     for k ∈ 1:length(t)
-        assemblelocal!(A,M(c[k],v[k],n),m[k],value(t[k]),n)
+        assemblelocal!(A,M(c[k],v[k],Val(ndims(p))),m[k],value(t[k]))
     end
     return A
 end
@@ -46,10 +46,10 @@ end
 assemblemassfunction(t,f,m=detsimplex(t),L=m) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,L))
 function assemblemassfunction(t,f::F,m::V,L::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
     np,N = length(points(t)),ndims(t)
-    M,b,n,l = spzeros(np,np), zeros(np), Val{N}(), L/N
+    M,b,n,l = spzeros(np,np), zeros(np), Val(N), L/N
     for k ∈ 1:length(t)
         tk = value(t[k])
-        assemblelocal!(M,mass(nothing,nothing,n),m[k],tk,n)
+        assemblelocal!(M,mass(nothing,nothing,n),m[k],tk)
         b[tk] .+= f[tk]*l[k][1]
     end
     return M,b

@@ -1,6 +1,18 @@
+<p align="center">
+  <img src="./docs/src/assets/logo.png" alt="DirectSum.jl"/>
+</p>
+
 # Adapode.jl
 
-Adaptive multistep numerical ODE solver based on [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) element assembly.
+*Adaptive multistep numerical ODE solver based on [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) element assembly*
+
+[![Docs Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://grassmann.crucialflow.com/stable)
+[![Docs Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://grassmann.crucialflow.com/dev)
+[![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
+[![Build status](https://ci.appveyor.com/api/projects/status/wpu43q92o06afi0a?svg=true)](https://ci.appveyor.com/project/chakravala/adapode-jl)
+[![Coverage Status](https://coveralls.io/repos/chakravala/Adapode.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/chakravala/Adapode.jl?branch=master)
+[![codecov.io](https://codecov.io/github/chakravala/Adapode.jl/coverage.svg?branch=master)](https://codecov.io/github/chakravala/Adapode.jl?branch=master)
 
 This Julia project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode).
 
@@ -13,6 +25,13 @@ Lorenz(x::Chain{V}) where V = Chain{V,1}(SVector{4,Float64}(
 	x[2]*(28.0-x[4])-x[3],
 	x[2]*x[3]-(8/3)*x[4]))
 lines(Point.((V(2,3,4)).(odesolve(Lorenz,x0))))
+```
+
+It is possible to work with L2 projection on a mesh with
+```julia
+L2Projector(t,f;args...) = mesh(t,color=\(assemblemassfunction(t,f)...);args...)
+L2Projector(initmesh(0:1/5:1)[3],x->x[2]*sin(x[2]))
+L2Projector(initmesh(0:1/5:1)[3],x->2x[2]*sin(2π*x[2])+3)
 ```
 
 Partial differential equations can also be assembled with various additional methods:
