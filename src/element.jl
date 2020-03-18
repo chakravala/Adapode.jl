@@ -61,11 +61,15 @@ assemblemassload(t,m=detsimplex(t),l=m) = assemblemassfunction(t,1,m,l)
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
 
+hgshift(hk::Chain{V}) where V = Chain{V(2,3),1}(SVector(-hk[3],hk[2]))
 function hatgradient(t,m=detsimplex(t))
     if ndims(t) == 2
         inv.(getindex.(value(m),1))
+    elseif ndims(t) == 3
+        h = curls(t,value(points(t))/(ndims(t)-1))./getindex.(value(m),1)
+        [Chain{Manifold(h),1}(SVector(hgshift.(value(h[k])))) for k ∈ 1:length(h)]
     else
-        curls(t,value(points(t))/(ndims(t)-1))./getindex.(value(m),1)
+        throw(error("hat gradient on Manifold{$(ndims(t))} not defined"))
     end
 end
 
@@ -83,7 +87,7 @@ assemblestiffness(t,c=1,m=detsimplex(t),v=hatgradient(t,m)) = assembleglobal(sti
 convection(b,g,::Val{3}) = ones(SVector{3,Int})*getindex.((b/3).⋅value(g),1)'
 assembleconvection(t,b,m=detsimplex(t),v=hatgradient(t,m)) = assembleglobal(convection,t,m,b,v)
 
-SD(b,g,::Val{3}) = (x=getindex.((b/3).⋅value(g),1);x*x')
+SD(b,g,::Val{3}) = (x=getindex.(b.⋅value(g),1);x*x')
 assembleSD(t,b,m=detsimplex(t),v=hatgradient(t,m)) = assembleglobal(SD,t,m,b,v)
 
 function robinmass(c::Vector{Chain{V,G,T,X}} where {G,T,X},κ::F,a,::Val{1}) where {V,F<:Function}
@@ -117,4 +121,3 @@ function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     R,r = assemblerobin(e,κ,gD,gN)
     return (A+R)\(b+r)
 end
-
