@@ -3,7 +3,7 @@ module Adapode
 #   This file is part of Aadapode.jl. It is licensed under the GPL license
 #   Adapode Copyright (C) 2019 Michael Reed
 
-using StaticArrays, SparseArrays
+using StaticArrays, SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann
 import Grassmann: value, vector, valuetype
 import Base: @pure
