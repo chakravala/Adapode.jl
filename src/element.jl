@@ -5,8 +5,9 @@
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices
-export gradienthat, gradientCR, submesh, detsimplex, iterable, callable, value
 export solvepoisson, solveSD, solvehomogeneous, boundary, interior
+export submesh, detsimplex, iterable, callable, value
+export gradienthat, gradientCR, gradient, interp
 import Grassmann: points
 
 @inline iterpts(t,f) = iterable(points(t),f)
@@ -81,12 +82,23 @@ function gradientCR(g::Chain{V}) where V
         Chain{V,1}(SVector{3,Int}(1,1,-1))))
 end
 
+gradient(t,u,m=detsimplex(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
+
+function interp(t,ut)
+    np,nt = length(points(t)),length(t)
+    A = spzeros(np,nt)
+    for i ∈ 1:ndims(t)
+        A += sparse(getindex.(value(t),i),1:nt,1,np,nt)
+    end
+    sparse(1:np,1:np,inv.(sum(A,dims=2))[:],np,np)*A*ut
+end
+
 function assembledivergence(t,m,g)
-    p = points(t); np = length(p);
-    D1,D2 = spzeros(np,np), spzeros(np,np)
+    p = points(t); np,nt = length(p),length(t)
+    D1,D2 = spzeros(nt,np), spzeros(nt,np)
     for k ∈ 1:length(t)
-        tk,gm = value(t[k]),g[k]*m[k]
-        for i ∈ tk
+        tk,gm = value(t[k]),g[k]*m[k][1]
+        for i ∈ 1:ndims(t)
             D1[k,tk[i]] = gm[i][1]
             D2[k,tk[i]] = gm[i][2]
         end
@@ -180,6 +192,6 @@ function edgesindices(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
     np,nt = length(points(t)),length(t)
     e = edges(t,i,j,k)
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
-    V = parent(e); nV = ndims(V); A = A+A'
+    V = DirectSum.supermanifold(parent(e)); nV = ndims(V); A = A+A'
     e,[Chain{V,1}(SVector{nV,Int}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]])) for n ∈ 1:nt]
 end
