@@ -26,9 +26,9 @@ end
 
 assembleglobal(M,t,m=detsimplex(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),iterable(t,c),iterable(t,g))
 function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
-    p = points(t); np = length(p); A = spzeros(np,np)
+    np = length(points(t)); A = spzeros(np,np)
     for k ∈ 1:length(t)
-        assemblelocal!(A,M(c[k],g[k],Val(ndims(p))),m[k],value(t[k]))
+        assemblelocal!(A,M(c[k],g[k],Val(ndims(t))),m[k],value(t[k]))
     end
     return A
 end
@@ -114,7 +114,7 @@ function stiffness(c,g,::Val{3})
     end
     return SMatrix{3,3,Float64}(A)
 end
-assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c≠1 ? means(t) : t,c),g)
+assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(isreal(c) ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
 convection(b,g,::Val{3}) = ones(SVector{3,Int})*getindex.((b/3).⋅value(g),1)'
@@ -159,7 +159,7 @@ function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
     m = detsimplex(t)
     g = gradienthat(t,m)
     A = assemblestiffness(t,c,m,g)
-    b = means(t,f(p))
+    b = means(t,f)
     C = assembleconvection(t,b,m,g)
     Sd = assembleSD(t,sqrt(δ)*b,m,g)
     R,r = assemblerobin(e,κ,gD,gN)
@@ -178,13 +178,10 @@ interior(e) = sort!(setdiff(1:length(points(e)),boundary(e)))
 
 edges(t::ChainBundle) = edges(value(t))
 function edges(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
-    np = length(points(t))
+    np,N = length(points(t)),ndims(t); M = points(t)(2:N...)
     A = sparse(j,k,1,np,np)+sparse(i,k,1,np,np)+sparse(i,j,1,np,np)
     f = findall(x->x>0,LinearAlgebra.triu(A+transpose(A)))
-    p = points(t); V = p(2:ndims(p)...); N = ndims(V)
-    e = [SVector{N,Int}(f[n].I) for n ∈ 1:length(f)]
-    M = ChainBundle(means(e,p))(2:(N+1)...)
-    return Chain{M,1}.(e)
+    [Chain{M,1}(SVector{N-1,Int}(f[n].I)) for n ∈ 1:length(f)]
 end
 
 edgesindices(t::ChainBundle) = edgesindices(value(t))
@@ -192,6 +189,6 @@ function edgesindices(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
     np,nt = length(points(t)),length(t)
     e = edges(t,i,j,k)
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
-    V = DirectSum.supermanifold(parent(e)); nV = ndims(V); A = A+A'
+    V = ChainBundle(means(e,points(t))); nV = ndims(V); A = A+A'
     e,[Chain{V,1}(SVector{nV,Int}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]])) for n ∈ 1:nt]
 end
