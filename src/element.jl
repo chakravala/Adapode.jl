@@ -4,10 +4,10 @@
 
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
-export assembleload, assemblemassload, assemblerobin, edges, edgesindices
-export solvepoisson, solveSD, solvehomogeneous, boundary, interior
-export submesh, detsimplex, iterable, callable, value
-export gradienthat, gradientCR, gradient, interp
+export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
+export solvepoisson, solveSD, solvehomogeneous, solveboundary, boundary, interior
+export submesh, detsimplex, iterable, callable, value, edgelengths
+export gradienthat, gradientCR, gradient, interp, nedelecmean
 import Grassmann: points
 
 @inline iterpts(t,f) = iterable(points(t),f)
@@ -61,13 +61,14 @@ assemblemassload(t,m=detsimplex(t),l=m) = assemblemassfunction(t,1,m,l)
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
 
-hgshift(hk::Chain{V}) where V = Chain{V(2,3),1}(SVector(-hk[3],hk[2]))
+revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(SVector(-f(hk[2]),f(hk[1])))
 function gradienthat(t,m=detsimplex(t))
     if ndims(t) == 2
         inv.(getindex.(value(m),1))
     elseif ndims(t) == 3
         h = curls(t,value(points(t))/(ndims(t)-1))./getindex.(value(m),1)
-        [Chain{Manifold(h),1}(SVector(hgshift.(value(h[k])))) for k ∈ 1:length(h)]
+        V = Manifold(h); V2 = V(2,3)
+        [Chain{V,1}(SVector(revrot.(V2.(value(h[k]))))) for k ∈ 1:length(h)]
     else
         throw(error("hat gradient on Manifold{$(ndims(t))} not defined"))
     end
@@ -108,11 +109,11 @@ end
 
 stiffness(c,g,::Val{2}) = SMatrix{2,2,Int}([1 -1; -1 1])*(c*g^2)
 function stiffness(c,g,::Val{3})
-    A = zeros(MMatrix{3,3,Float64})
+    A = zeros(MMatrix{3,3,typeof(c)})
     for i ∈ 1:3, j ∈ 1:3
         A[i,j] += c*(g[i]⋅g[j])[1]
     end
-    return SMatrix{3,3,Float64}(A)
+    return SMatrix{3,3,typeof(c)}(A)
 end
 assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(isreal(c) ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
@@ -122,6 +123,23 @@ assembleconvection(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(conv
 
 SD(b,g,::Val{3}) = (x=getindex.(b.⋅value(g),1);x*x')
 assembleSD(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
+
+function nedelec(λ,g,v::Val{3})
+    f = stiffness(λ,g,v)
+    m11 = (f[3,3]-f[2,3]+f[2,2])/6
+    m22 = (f[1,1]-f[1,3]+f[3,3])/6
+    m33 = (f[2,2]-f[1,2]+f[1,1])/6
+    m12 = (f[3,1]-f[3,3]-2f[2,1]+f[2,3])/12
+    m13 = (f[3,2]-2f[3,1]-f[2,2]+f[2,1])/12
+    m23 = (f[1,2]-f[1,1]-2f[3,2]+f[3,1])/12
+    @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
+end
+
+function rotrot(λ,g,μ,len,fhat)
+    AK = (inv(μ).+nedelec(λ,g,Val(3))).*(len*len')
+    bK = getindex.(fhat.⋅value(curl(g)),1).*len
+    return AK,bK
+end
 
 function robinmass(c::Vector{Chain{V,G,T,X}} where {G,T,X},κ::F,a,::Val{1}) where {V,F<:Function}
     p = Grassmann.isbundle(V) ? V : DirectSum.supermanifold(V)
@@ -163,7 +181,16 @@ function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
     C = assembleconvection(t,b,m,g)
     Sd = assembleSD(t,sqrt(δ)*b,m,g)
     R,r = assemblerobin(e,κ,gD,gN)
-    return (A-C'+R+Sd)\r
+    return (A+R-C'+Sd)\r
+end
+
+function solveboundary(A,b,fixed,boundary=zeros(length(fixed)))
+    neq = length(b)
+    free = sort!(setdiff(1:neq,fixed))
+    ξ = zeros(eltype(b),neq)
+    ξ[fixed] = boundary
+    ξ[free] = A[free,free]\(b[free]-A[free,fixed]*boundary)
+    return ξ
 end
 
 function solvehomogeneous(e,M,b)
@@ -189,6 +216,57 @@ function edgesindices(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
     np,nt = length(points(t)),length(t)
     e = edges(t,i,j,k)
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
-    V = ChainBundle(means(e,points(t))); nV = ndims(V); A = A+A'
+    V = ChainBundle(means(e,points(t))); nV = ndims(V); A += A'
     e,[Chain{V,1}(SVector{nV,Int}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]])) for n ∈ 1:nt]
+end
+
+edgelengths(e) = value.(abs.(getindex.(diff.(getindex.(Ref(DirectSum.supermanifold(Manifold(e))),value.(e))),1)))
+
+function neighbor!(out,m,t,i,::Val{a},::Val{b},::Val{c}) where {a,b,c}
+    n = setdiff(intersect(findall(x->x>0,m[t[i][a],:]),findall(x->x>0,m[t[i][b],:])),i)
+    !isempty(n) && (out[c] = n[1])
+end
+
+function neighbors(T)
+    np,nt,t = length(points(T)),length(T),value(T)
+    n2e = spzeros(np,nt) # node-to-element adjacency matrix, n2e[i,j]==1 -> i ∈ j
+    for i ∈ 1:nt
+        n2e[value(t[i]),i] .= (1,1,1)
+    end
+    V = SubManifold(ℝ^3)
+    hood = Chain{V,1,Int,3}[]
+    resize!(hood,nt)
+    out = zeros(MVector{3,Int})
+    for i ∈ 1:nt
+        out .= 0
+        neighbor!(out,n2e,t,i,Val(2),Val(3),Val(1))
+        neighbor!(out,n2e,t,i,Val(3),Val(1),Val(2))
+        neighbor!(out,n2e,t,i,Val(1),Val(2),Val(3))
+        hood[i] = Chain{V,1}(out)
+    end
+    return hood
+end
+
+basetransform(t::ChainBundle) = basetransform(value(t))
+function basetransform(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
+    nt,p = length(t),points(t)
+    M,A = Manifold(p)(2,3),p[i]
+    Chain{M,1}.(SVector.(M.(p[j]-A),M.(p[k]-A)))
+end
+
+function basisnedelec(p)
+    M = ℝ^3; V = M(2,3)
+    Chain{M,1}(SVector(
+        Chain{V,1}(SVector(-p[2],p[1])),
+        Chain{V,1}(SVector(-p[2],p[1]-1)),
+        Chain{V,1}(SVector(1-p[2],p[1]))))
+end
+
+function nedelecmean(t,t2e,signs,u)
+    base = basetransform(t)
+    B = revrot.(base,revrot)./getindex.(.∧(value.(base)),1)
+    N = basisnedelec(ones(2)/3)
+    x,y,z = getindex.(t2e,1),getindex.(t2e,2),getindex.(t2e,3)
+    X,Y,Z = getindex.(signs,1),getindex.(signs,2),getindex.(signs,3)
+    (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
 end
