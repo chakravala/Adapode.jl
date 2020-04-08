@@ -5,10 +5,10 @@
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
-export solvepoisson, solveSD, solvehomogeneous, solveboundary, boundary, interior
-export submesh, detsimplex, iterable, callable, value, edgelengths
-export gradienthat, gradientCR, gradient, interp, nedelecmean
-import Grassmann: points
+export solvepoisson, solveSD, solvedirichlet, boundary, interior, trilength, trinormals
+export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
+export submesh, detsimplex, iterable, callable, value, edgelengths, adaptpoisson
+import Grassmann: points, norm
 
 @inline iterpts(t,f) = iterable(points(t),f)
 @inline iterable(p,f) = range(f,f,length=length(p))
@@ -62,16 +62,26 @@ mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/facto
 assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
 
 revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(SVector(-f(hk[2]),f(hk[1])))
+
 function gradienthat(t,m=detsimplex(t))
     if ndims(t) == 2
         inv.(getindex.(value(m),1))
     elseif ndims(t) == 3
-        h = curls(t,value(points(t))/(ndims(t)-1))./getindex.(value(m),1)
+        h = curls(t)./2getindex.(value(m),1)
         V = Manifold(h); V2 = V(2,3)
-        [Chain{V,1}(SVector(revrot.(V2.(value(h[k]))))) for k ∈ 1:length(h)]
+        [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
     else
         throw(error("hat gradient on Manifold{$(ndims(t))} not defined"))
     end
+end
+
+trilength(rc) = value.(abs.(value(rc)))
+function trinormals(t)
+    c = curls(t)
+    ds = trilength.(c)
+    V = Manifold(c); V2 = V(2,3)
+    dn = [Chain{V,1}(revrot.(V2.(value(c[k]))./-ds[k])) for k ∈ 1:length(c)]
+    return ds,dn
 end
 
 gradientCR(t,m) = gradientCR(gradienthat(t,m))
@@ -115,7 +125,7 @@ function stiffness(c,g,::Val{3})
     end
     return SMatrix{3,3,typeof(c)}(A)
 end
-assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(isreal(c) ? t : means(t),c),g)
+assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
 convection(b,g,::Val{3}) = ones(SVector{3,Int})*getindex.((b/3).⋅value(g),1)'
@@ -135,12 +145,6 @@ function nedelec(λ,g,v::Val{3})
     @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
 end
 
-function rotrot(λ,g,μ,len,fhat)
-    AK = (inv(μ).+nedelec(λ,g,Val(3))).*(len*len')
-    bK = getindex.(fhat.⋅value(curl(g)),1).*len
-    return AK,bK
-end
-
 function robinmass(c::Vector{Chain{V,G,T,X}} where {G,T,X},κ::F,a,::Val{1}) where {V,F<:Function}
     p = Grassmann.isbundle(V) ? V : DirectSum.supermanifold(V)
     [Chain{Manifold(p),0,Float64}((κ(a[k]),)) for k ∈ 1:length(c)]
@@ -153,8 +157,8 @@ robinmass(c,κ,a=means(m)) = robinmass(c,callable(κ),a)
 robinload(c,m,gD::D,gN::N,a) where {D<:Function,N<:Function} = [m[k]*gD(a[k])+gN(a[k]) for k ∈ 1:length(c)]
 robinload(c,m,gD,gN,a=means(m)) = robinload(c,m,callable(gD),callable(gN),a)
 
-function assemble(t,c=1,f=0,m=detsimplex(t),g=gradienthat(t,m))
-    M,b = assemblemassfunction(t,f,m,m)
+function assemble(t,c=1,a=1,f=0,m=detsimplex(t),g=gradienthat(t,m))
+    M,b = assemblemassfunction(t,f,isone(a) ? m : a*m,m)
     return assemblestiffness(t,c,m,g),M,b
 end
 
@@ -184,24 +188,41 @@ function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
     return (A+R-C'+Sd)\r
 end
 
-function solveboundary(A,b,fixed,boundary=zeros(length(fixed)))
+function adaptpoisson(g,p,e,t,c=1,a=0,f=1)
+    ϵ = 1.0
+    while ϵ > 5e-5 && length(t) < 10000
+        m = detsimplex(t)
+        h = gradienthat(t,m)
+        A,M,b = assemble(t,c,a,f,m,h)
+        ξ = solvedirichlet(A+M,b,boundary(e))
+        η = jumps(t,c,a,f,ξ,m,h)
+        ϵ = sqrt(norm(η)^2/length(η))
+        println(t,", ϵ=$ϵ, α=$(ϵ/maximum(η))")
+        refinemesh!(g,p,e,t,select(η,ϵ),"regular")
+    end
+    return g,p,e,t
+end
+
+function solvedirichlet(A,b,fixed,boundary)
     neq = length(b)
-    free = sort!(setdiff(1:neq,fixed))
-    ξ = zeros(eltype(b),neq)
+    free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
     ξ[fixed] = boundary
     ξ[free] = A[free,free]\(b[free]-A[free,fixed]*boundary)
     return ξ
 end
-
-function solvehomogeneous(e,M,b)
-    free = interior(e)
-    ξ = zeros(length(points(e)))
+function solvedirichlet(M,b,fixed)
+    neq = length(b)
+    free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
     ξ[free] = M[free,free]\b[free]
     return ξ
 end
 
 boundary(e) = sort!(unique(vcat(value.(value(e))...)))
-interior(e) = sort!(setdiff(1:length(points(e)),boundary(e)))
+interior(e) = interior(length(points(e)),boundary(e))
+interior(fixed,neq) = sort!(setdiff(1:neq,fixed))
+solvehomogenous(e,M,b) = solvedirichlet(M,b,boundary(e))
+const solveboundary = solvedirichlet
+export solvehomogenous, solveboundary # deprecate
 
 edges(t::ChainBundle) = edges(value(t))
 function edges(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
@@ -269,4 +290,33 @@ function nedelecmean(t,t2e,signs,u)
     x,y,z = getindex.(t2e,1),getindex.(t2e,2),getindex.(t2e,3)
     X,Y,Z = getindex.(signs,1),getindex.(signs,2),getindex.(signs,3)
     (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
+end
+
+function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
+    np,nt = length(points(t)),length(t)
+    η = zeros(nt)
+    if ndims(t) == 2
+        fau = iterable(points(t),f).-a*u
+        for i ∈ 1:nt
+            η[i] = m[i][1]*sqrt((fau[i]^2+fau[i+1]^2)*m[i][1]/2)
+        end
+    elseif ndims(t) == 3
+        ds,dn = trinormals(t) # ds.^1
+        du,F = gradient(t,u,m,g),iterable(t,f)
+        fl = [-c*getindex.(value(dn[k]).⋅du[k],1) for k ∈ 1:length(du)]
+        ξ = [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k][1]) for k ∈ 1:nt].*maximum.(ds)
+        i,j,k = getindex.(value(t),1),getindex.(value(t),2),getindex.(value(t),3)
+        intj = sparse(j,k,1,np,np)+sparse(k,i,1,np,np)+sparse(i,j,1,np,np)
+        intj = round.((intj+transpose(intj))/3)
+        jmps = sparse(j,k,getindex.(fl,1),np,np)+sparse(k,i,getindex.(fl,2),np,np)+sparse(i,j,getindex.(fl,3),np,np)
+        jmps = abs.(intj.*abs.(jmps+jmps'))
+        for k = 1:nt
+            tk,dsk = t[k],ds[k]
+            η[k] = sqrt(((dsk[3]*jmps[tk[1],tk[2]])^2+(dsk[1]*jmps[tk[2],tk[3]])^2+(dsk[2]*jmps[tk[3],tk[1]])^2)/2)
+        end
+        η += ξ
+    else
+        throw(error("jumps on Manifold{$(ndims(t))} not defined"))
+    end
+    return η
 end
