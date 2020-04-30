@@ -9,6 +9,7 @@ export solvepoisson, solveSD, solvedirichlet, boundary, interior, trilength, tri
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
 export submesh, detsimplex, iterable, callable, value, edgelengths, adaptpoisson
 import Grassmann: points, norm
+using Base.Threads
 
 @inline iterpts(t,f) = iterable(points(t),f)
 @inline iterable(p,f) = range(f,f,length=length(p))
@@ -158,7 +159,7 @@ robinload(c,m,gD::D,gN::N,a) where {D<:Function,N<:Function} = [m[k]*gD(a[k])+gN
 robinload(c,m,gD,gN,a=means(m)) = robinload(c,m,callable(gD),callable(gN),a)
 
 function assemble(t,c=1,a=1,f=0,m=detsimplex(t),g=gradienthat(t,m))
-    M,b = assemblemassfunction(t,f,isone(a) ? m : a*m,m)
+    M,b = assemblemassfunction(t,f,isone(a) ? m : a.*m,m)
     return assemblestiffness(t,c,m,g),M,b
 end
 
@@ -188,13 +189,13 @@ function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
     return (A+R-C'+Sd)\r
 end
 
-function adaptpoisson(g,p,e,t,c=1,a=0,f=1)
+function adaptpoisson(g,p,e,t,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
     ϵ = 1.0
     while ϵ > 5e-5 && length(t) < 10000
         m = detsimplex(t)
         h = gradienthat(t,m)
         A,M,b = assemble(t,c,a,f,m,h)
-        ξ = solvedirichlet(A+M,b,boundary(e))
+        ξ = solvedirichlet(A+M,b,e)
         η = jumps(t,c,a,f,ξ,m,h)
         ϵ = sqrt(norm(η)^2/length(η))
         println(t,", ϵ=$ϵ, α=$(ϵ/maximum(η))")
@@ -203,6 +204,8 @@ function adaptpoisson(g,p,e,t,c=1,a=0,f=1)
     return g,p,e,t
 end
 
+solvedirichlet(M,b,e::ChainBundle) = solvedirichlet(M,b,boundary(e))
+solvedirichlet(M,b,e::ChainBundle,u) = solvedirichlet(M,b,boundary(e),u)
 function solvedirichlet(A,b,fixed,boundary)
     neq = length(b)
     free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
@@ -220,7 +223,7 @@ end
 boundary(e) = sort!(unique(vcat(value.(value(e))...)))
 interior(e) = interior(length(points(e)),boundary(e))
 interior(fixed,neq) = sort!(setdiff(1:neq,fixed))
-solvehomogenous(e,M,b) = solvedirichlet(M,b,boundary(e))
+solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
 const solveboundary = solvedirichlet
 export solvehomogenous, solveboundary # deprecate
 
@@ -243,9 +246,9 @@ end
 
 edgelengths(e) = value.(abs.(getindex.(diff.(getindex.(Ref(DirectSum.supermanifold(Manifold(e))),value.(e))),1)))
 
-function neighbor!(out,m,t,i,::Val{a},::Val{b},::Val{c}) where {a,b,c}
-    n = setdiff(intersect(findall(x->x>0,m[t[i][a],:]),findall(x->x>0,m[t[i][b],:])),i)
-    !isempty(n) && (out[c] = n[1])
+function neighbor(k,a,b)
+    n = setdiff(intersect(a,b),k)
+    isempty(n) ? 0 : n[1]
 end
 
 function neighbors(T)
@@ -254,18 +257,14 @@ function neighbors(T)
     for i ∈ 1:nt
         n2e[value(t[i]),i] .= (1,1,1)
     end
-    V = SubManifold(ℝ^3)
-    hood = Chain{V,1,Int,3}[]
-    resize!(hood,nt)
-    out = zeros(MVector{3,Int})
-    for i ∈ 1:nt
-        out .= 0
-        neighbor!(out,n2e,t,i,Val(2),Val(3),Val(1))
-        neighbor!(out,n2e,t,i,Val(3),Val(1),Val(2))
-        neighbor!(out,n2e,t,i,Val(1),Val(2),Val(3))
-        hood[i] = Chain{V,1}(out)
+    V,f = SubManifold(ℝ^3),(x->x>0)
+    n = Chain{V,1,Int,3}[]; resize!(n,nt)
+    @threads for k ∈ 1:nt
+        tk = t[k]
+        a,b,c = findall(f,n2e[tk[1],:]),findall(f,n2e[tk[2],:]),findall(f,n2e[tk[3],:])
+        n[k] = Chain{V,1}(SVector{3,Int}(neighbor(k,b,c),neighbor(k,c,a),neighbor(k,a,b)))
     end
-    return hood
+    return n
 end
 
 basetransform(t::ChainBundle) = basetransform(value(t))
@@ -297,24 +296,23 @@ function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
     η = zeros(nt)
     if ndims(t) == 2
         fau = iterable(points(t),f).-a*u
-        for i ∈ 1:nt
+        @threads for i ∈ 1:nt
             η[i] = m[i][1]*sqrt((fau[i]^2+fau[i+1]^2)*m[i][1]/2)
         end
     elseif ndims(t) == 3
         ds,dn = trinormals(t) # ds.^1
         du,F = gradient(t,u,m,g),iterable(t,f)
         fl = [-c*getindex.(value(dn[k]).⋅du[k],1) for k ∈ 1:length(du)]
-        ξ = [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k][1]) for k ∈ 1:nt].*maximum.(ds)
         i,j,k = getindex.(value(t),1),getindex.(value(t),2),getindex.(value(t),3)
         intj = sparse(j,k,1,np,np)+sparse(k,i,1,np,np)+sparse(i,j,1,np,np)
         intj = round.((intj+transpose(intj))/3)
         jmps = sparse(j,k,getindex.(fl,1),np,np)+sparse(k,i,getindex.(fl,2),np,np)+sparse(i,j,getindex.(fl,3),np,np)
         jmps = abs.(intj.*abs.(jmps+jmps'))
-        for k = 1:nt
+        @threads for k = 1:nt
             tk,dsk = t[k],ds[k]
             η[k] = sqrt(((dsk[3]*jmps[tk[1],tk[2]])^2+(dsk[1]*jmps[tk[2],tk[3]])^2+(dsk[2]*jmps[tk[3],tk[1]])^2)/2)
         end
-        η += ξ
+        η += [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k][1]) for k ∈ 1:nt].*maximum.(ds)
     else
         throw(error("jumps on Manifold{$(ndims(t))} not defined"))
     end

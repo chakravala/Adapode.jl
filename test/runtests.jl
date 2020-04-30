@@ -24,3 +24,4 @@ end
     end
     true
 end
+@test (adaptpoisson(refinemesh(0:0.25:1)...,1,0,x->exp(-100abs2(x[2]-0.5))); true)
