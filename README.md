@@ -20,11 +20,11 @@ This Julia project originally started as a FORTRAN 95 project called [adapode](h
 ```julia
 using Grassmann, Adapode, Makie
 basis"4"; x0 = 10.0v2+10.0v3+10.0v4
-Lorenz(x::Chain{V}) where V = Chain{V,1}(SVector{4,Float64}(
+Lorenz(x::Chain{V}) where V = Chain{V,1}(
 	1.0,
 	10.0(x[3]-x[2]),
 	x[2]*(28.0-x[4])-x[3],
-	x[2]*x[3]-(8/3)*x[4]))
+	x[2]*x[3]-(8/3)*x[4])
 lines(Point.((V(2,3,4)).(odesolve(Lorenz,x0))))
 ```
 
@@ -57,5 +57,26 @@ function BackwardEulerHeat1D()
     end
     mesh(t,color=ξ)
 end
+function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
+    ϵ = 1.0
+    while ϵ > 5e-5 && length(t) < 10000
+        m = detsimplex(t)
+        h = gradienthat(t,m)
+        A,M,b = assemble(t,c,a,f,m,h)
+        ξ = solvedirichlet(A+M,b,e)
+        η = jumps(t,c,a,f,ξ,m,h)
+        scene = mesh(t,color=ξ,shading=false); display(scene)
+        if typeof(g)<:AbstractRange
+            scatter!(p,ξ,markersize=0.01)
+        else
+            wireframe!(scene[end][1],color=(:red,0.6),linewidth=3)
+        end
+        ϵ = sqrt(norm(η)^2/length(η))
+        println(t,", ϵ=$ϵ, α=$(ϵ/maximum(η))"); sleep(0.5)
+        refinemesh!(g,p,e,t,select(η,ϵ),"regular")
+    end
+    return g,p,e,t
+end
+PoissonAdaptive(refinemesh(0:0.25:1)...,1,0,x->exp(-100abs2(x[2]-0.5)))
 ```
 More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources. These methods can automatically generalize to higher dimensional manifolds and is compatible with discrete differential geometry.

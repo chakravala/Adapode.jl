@@ -19,9 +19,11 @@ using Base.Threads
 @inline callable(c::F) where F<:Function = c
 @inline callable(c) = x->c
 
-function assemblelocal!(M,mat::SMatrix{N,N},m,tk::SVector{N}) where N
-    for i ∈ 1:N, j∈ 1:N
-        M[tk[i],tk[j]] += mat[i,j]*m[1]
+for T ∈ (:SVector,:MVector)
+    @eval function assemblelocal!(M,mat::SMatrix{N,N},m,tk::$T{N}) where N
+        for i ∈ 1:N, j∈ 1:N
+            M[tk[i],tk[j]] += mat[i,j]*m[1]
+        end
     end
 end
 
@@ -62,7 +64,7 @@ assemblemassload(t,m=detsimplex(t),l=m) = assemblemassfunction(t,1,m,l)
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
 
-revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(SVector(-f(hk[2]),f(hk[1])))
+revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 
 function gradienthat(t,m=detsimplex(t))
     if ndims(t) == 2
@@ -89,9 +91,9 @@ gradientCR(t,m) = gradientCR(gradienthat(t,m))
 gradientCR(g) = gradientCR.(g)
 function gradientCR(g::Chain{V}) where V
     Chain{V,1}(g.⋅SVector(
-        Chain{V,1}(SVector{3,Int}(-1,1,1)),
-        Chain{V,1}(SVector{3,Int}(1,-1,1)),
-        Chain{V,1}(SVector{3,Int}(1,1,-1))))
+        Chain{V,1}(-1,1,1),
+        Chain{V,1}(1,-1,1),
+        Chain{V,1}(1,1,-1)))
 end
 
 gradient(t,u,m=detsimplex(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
@@ -240,13 +242,13 @@ function edgesindices(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
     np,nt = length(points(t)),length(t)
     e = edges(t,i,j,k)
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
-    V = ChainBundle(means(e,points(t))); nV = ndims(V); A += A'
-    e,[Chain{V,1}(SVector{nV,Int}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]])) for n ∈ 1:nt]
+    V = ChainBundle(means(e,points(t))); A += A'
+    e,[Chain{V,1}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
 end
 
 edgelengths(e) = value.(abs.(getindex.(diff.(getindex.(Ref(DirectSum.supermanifold(Manifold(e))),value.(e))),1)))
 
-function neighbor(k,a,b)
+function neighbor(k,a,b)::Int
     n = setdiff(intersect(a,b),k)
     isempty(n) ? 0 : n[1]
 end
@@ -262,7 +264,7 @@ function neighbors(T)
     @threads for k ∈ 1:nt
         tk = t[k]
         a,b,c = findall(f,n2e[tk[1],:]),findall(f,n2e[tk[2],:]),findall(f,n2e[tk[3],:])
-        n[k] = Chain{V,1}(SVector{3,Int}(neighbor(k,b,c),neighbor(k,c,a),neighbor(k,a,b)))
+        n[k] = Chain{V,1}(neighbor(k,b,c),neighbor(k,c,a),neighbor(k,a,b))
     end
     return n
 end
@@ -276,10 +278,10 @@ end
 
 function basisnedelec(p)
     M = ℝ^3; V = M(2,3)
-    Chain{M,1}(SVector(
-        Chain{V,1}(SVector(-p[2],p[1])),
-        Chain{V,1}(SVector(-p[2],p[1]-1)),
-        Chain{V,1}(SVector(1-p[2],p[1]))))
+    Chain{M,1}(
+        Chain{V,1}(-p[2],p[1]),
+        Chain{V,1}(-p[2],p[1]-1),
+        Chain{V,1}(1-p[2],p[1]))
 end
 
 function nedelecmean(t,t2e,signs,u)
