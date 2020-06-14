@@ -31,14 +31,14 @@ assembleglobal(M,t,m=detsimplex(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),i
 function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
     np = length(points(t)); A = spzeros(np,np)
     for k ∈ 1:length(t)
-        assemblelocal!(A,M(c[k],g[k],Val(ndims(t))),m[k],value(t[k]))
+        assemblelocal!(A,M(c[k],g[k],Val(ndims(Manifold(t)))),m[k],value(t[k]))
     end
     return A
 end
 
 assemblefunction(t,f,m=detsimplex(t)) = assemblefunction(t,iterpts(t,f),iterable(t,m))
 function assemblefunction(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
-    b,l = zeros(length(points(t))),m/ndims(t)
+    b,l = zeros(length(points(t))),m/ndims(Manifold(t))
     for k ∈ 1:length(t)
         tk = value(t[k])
         b[tk] .+= f[tk]*l[k][1]
@@ -48,7 +48,7 @@ end
 
 assemblemassfunction(t,f,m=detsimplex(t),L=m) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,L))
 function assemblemassfunction(t,f::F,m::V,L::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
-    np,N = length(points(t)),ndims(t)
+    np,N = length(points(t)),ndims(Manifold(t))
     M,b,n,l = spzeros(np,np), zeros(np), Val(N), L/N
     for k ∈ 1:length(t)
         tk = value(t[k])
@@ -67,14 +67,15 @@ assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
 revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 
 function gradienthat(t,m=detsimplex(t))
-    if ndims(t) == 2
+    N = ndims(Manifold(t))
+    if N == 2
         inv.(getindex.(value(m),1))
-    elseif ndims(t) == 3
+    elseif N == 3
         h = curls(t)./2getindex.(value(m),1)
         V = Manifold(h); V2 = V(2,3)
         [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
     else
-        throw(error("hat gradient on Manifold{$(ndims(t))} not defined"))
+        throw(error("hat gradient on Manifold{$N} not defined"))
     end
 end
 
@@ -101,7 +102,7 @@ gradient(t,u,m=detsimplex(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k])
 function interp(t,ut)
     np,nt = length(points(t)),length(t)
     A = spzeros(np,nt)
-    for i ∈ 1:ndims(t)
+    for i ∈ 1:ndims(Manifold(t))
         A += sparse(getindex.(value(t),i),1:nt,1,np,nt)
     end
     sparse(1:np,1:np,inv.(sum(A,dims=2))[:],np,np)*A*ut
@@ -112,7 +113,7 @@ function assembledivergence(t,m,g)
     D1,D2 = spzeros(nt,np), spzeros(nt,np)
     for k ∈ 1:length(t)
         tk,gm = value(t[k]),g[k]*m[k][1]
-        for i ∈ 1:ndims(t)
+        for i ∈ 1:ndims(Manifold(t))
             D1[k,tk[i]] = gm[i][1]
             D2[k,tk[i]] = gm[i][2]
         end
@@ -129,6 +130,16 @@ function stiffness(c,g,::Val{3})
     return SMatrix{3,3,typeof(c)}(A)
 end
 assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
+# iterable(means(t),c) # mapping of c.(means(t))
+
+function sonicstiffness(c,g,::Val{3})
+    A = zeros(MMatrix{3,3,typeof(c)})
+    for i ∈ 1:3, j ∈ 1:3
+        A[i,j] += c*g[i][1]^2+g[j][2]^2
+    end
+    return SMatrix{3,3,typeof(c)}(A)
+end
+assemblesonic(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
 convection(b,g,::Val{3}) = ones(SVector{3,Int})*getindex.((b/3).⋅value(g),1)'
@@ -231,7 +242,7 @@ export solvehomogenous, solveboundary # deprecate
 
 edges(t::ChainBundle) = edges(value(t))
 function edges(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
-    np,N = length(points(t)),ndims(t); M = points(t)(2:N...)
+    np,N = length(points(t)),ndims(Manifold(t)); M = points(t)(2:N...)
     A = sparse(j,k,1,np,np)+sparse(i,k,1,np,np)+sparse(i,j,1,np,np)
     f = findall(x->x>0,LinearAlgebra.triu(A+transpose(A)))
     [Chain{M,1}(SVector{N-1,Int}(f[n].I)) for n ∈ 1:length(f)]
@@ -294,14 +305,14 @@ function nedelecmean(t,t2e,signs,u)
 end
 
 function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
-    np,nt = length(points(t)),length(t)
+    N,np,nt = ndims(Manifold(t)),length(points(t)),length(t)
     η = zeros(nt)
-    if ndims(t) == 2
+    if N == 2
         fau = iterable(points(t),f).-a*u
         @threads for i ∈ 1:nt
             η[i] = m[i][1]*sqrt((fau[i]^2+fau[i+1]^2)*m[i][1]/2)
         end
-    elseif ndims(t) == 3
+    elseif N == 3
         ds,dn = trinormals(t) # ds.^1
         du,F = gradient(t,u,m,g),iterable(t,f)
         fl = [-c*getindex.(value(dn[k]).⋅du[k],1) for k ∈ 1:length(du)]
@@ -316,7 +327,7 @@ function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
         end
         η += [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k][1]) for k ∈ 1:nt].*maximum.(ds)
     else
-        throw(error("jumps on Manifold{$(ndims(t))} not defined"))
+        throw(error("jumps on Manifold{$N} not defined"))
     end
     return η
 end
