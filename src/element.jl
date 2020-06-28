@@ -75,7 +75,7 @@ function gradienthat(t,m=detsimplex(t))
         V = Manifold(h); V2 = V(2,3)
         [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
     else
-        throw(error("hat gradient on Manifold{$N} not defined"))
+        Grassmann.grad.(value.(value(points(t)[t])))
     end
 end
 
@@ -121,23 +121,23 @@ function assembledivergence(t,m,g)
     return D1,D2
 end
 
-stiffness(c,g,::Val{2}) = SMatrix{2,2,Int}([1 -1; -1 1])*(c*g^2)
-function stiffness(c,g,::Val{3})
-    A = zeros(MMatrix{3,3,typeof(c)})
-    for i ∈ 1:3, j ∈ 1:3
+stiffness(c,g,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
+function stiffness(c,g,::Val{N}) where N
+    A = zeros(MMatrix{N,N,typeof(c)})
+    for i ∈ 1:N, j ∈ 1:N
         A[i,j] += c*(g[i]⋅g[j])[1]
     end
-    return SMatrix{3,3,typeof(c)}(A)
+    return SMatrix{N,N,typeof(c)}(A)
 end
 assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
-function sonicstiffness(c,g,::Val{3})
-    A = zeros(MMatrix{3,3,typeof(c)})
-    for i ∈ 1:3, j ∈ 1:3
+function sonicstiffness(c,g,::Val{N}) where N
+    A = zeros(MMatrix{N,N,typeof(c)})
+    for i ∈ 1:N, j ∈ 1:N
         A[i,j] += c*g[i][1]^2+g[j][2]^2
     end
-    return SMatrix{3,3,typeof(c)}(A)
+    return SMatrix{N,N,typeof(c)}(A)
 end
 assemblesonic(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
