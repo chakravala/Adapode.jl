@@ -240,21 +240,25 @@ solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
 const solveboundary = solvedirichlet
 export solvehomogenous, solveboundary # deprecate
 
-edges(t::ChainBundle) = edges(value(t))
-function edges(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
-    np,N = length(points(t)),ndims(Manifold(t)); M = points(t)(2:N...)
-    A = sparse(j,k,1,np,np)+sparse(i,k,1,np,np)+sparse(i,j,1,np,np)
+column(t,i) = getindex.(value(t),i)
+columns(t) = column.(Ref(value(t)),Grassmann.list(1,ndims(t)))
+
+function edges(t,cols=columns(t))
+    np,N = length(points(t)),ndims(Manifold(t)); M = points(t)(N-1:N...)
+    A = spzeros(np,np)
+    for c ∈ Grassmann.combo(N,2)
+        A += sparse(cols[c[1]],cols[c[2]],1,np,np)
+    end
     f = findall(x->x>0,LinearAlgebra.triu(A+transpose(A)))
-    [Chain{M,1}(SVector{N-1,Int}(f[n].I)) for n ∈ 1:length(f)]
+    [Chain{M,1}(SVector{2,Int}(f[n].I)) for n ∈ 1:length(f)]
 end
 
-edgesindices(t::ChainBundle) = edgesindices(value(t))
-function edgesindices(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
+function edgesindices(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
-    e = edges(t,i,j,k)
+    e = edges(t,cols); i,j,k = cols
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
     V = ChainBundle(means(e,points(t))); A += A'
-    e,[Chain{V,1}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
+    e,[Chain{V,2}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
 end
 
 edgelengths(e) = value.(abs.(getindex.(diff.(getindex.(Ref(DirectSum.supermanifold(Manifold(e))),value.(e))),1)))
