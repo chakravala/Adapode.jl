@@ -8,7 +8,7 @@ export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neigh
 export solvepoisson, solveSD, solvedirichlet, boundary, interior, trilength, trinormals
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
 export submesh, detsimplex, iterable, callable, value, edgelengths, adaptpoisson
-import Grassmann: points, norm
+import Grassmann: norm, column, columns, points, pointset, edges
 using Base.Threads
 
 @inline iterpts(t,f) = iterable(points(t),f)
@@ -69,13 +69,13 @@ revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 function gradienthat(t,m=detsimplex(t))
     N = ndims(Manifold(t))
     if N == 2
-        inv.(getindex.(value(m),1))
+        inv.(column(m))
     elseif N == 3
-        h = curls(t)./2getindex.(value(m),1)
-        V = Manifold(h); V2 = V(2,3)
+        h = curls(t)./2column(m)
+        V = Manifold(h); V2 = ↓(V)
         [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
     else
-        Grassmann.grad.(value.(value(points(t)[t])))
+        Grassmann.grad.(points(t)[value(t)])
     end
 end
 
@@ -83,7 +83,7 @@ trilength(rc) = value.(abs.(value(rc)))
 function trinormals(t)
     c = curls(t)
     ds = trilength.(c)
-    V = Manifold(c); V2 = V(2,3)
+    V = Manifold(c); V2 = ↓(V)
     dn = [Chain{V,1}(revrot.(V2.(value(c[k]))./-ds[k])) for k ∈ 1:length(c)]
     return ds,dn
 end
@@ -103,7 +103,7 @@ function interp(t,ut)
     np,nt = length(points(t)),length(t)
     A = spzeros(np,nt)
     for i ∈ 1:ndims(Manifold(t))
-        A += sparse(getindex.(value(t),i),1:nt,1,np,nt)
+        A += sparse(column(t,i),1:nt,1,np,nt)
     end
     sparse(1:np,1:np,inv.(sum(A,dims=2))[:],np,np)*A*ut
 end
@@ -142,10 +142,10 @@ end
 assemblesonic(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
-convection(b,g,::Val{3}) = ones(SVector{3,Int})*getindex.((b/3).⋅value(g),1)'
+convection(b,g,::Val{3}) = ones(SVector{3,Int})*column((b/3).⋅value(g))'
 assembleconvection(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(convection,t,m,b,g)
 
-SD(b,g,::Val{3}) = (x=getindex.(b.⋅value(g),1);x*x')
+SD(b,g,::Val{3}) = (x=column(b.⋅value(g));x*x')
 assembleSD(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
 
 function nedelec(λ,g,v::Val{3})
@@ -233,35 +233,22 @@ function solvedirichlet(M,b,fixed)
     return ξ
 end
 
-boundary(e) = sort!(unique(vcat(value.(value(e))...)))
-interior(e) = interior(length(points(e)),boundary(e))
+const boundary = pointset # deprecate
+interior(e) = interior(length(points(e)),pointset(e))
 interior(fixed,neq) = sort!(setdiff(1:neq,fixed))
 solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
 const solveboundary = solvedirichlet
 export solvehomogenous, solveboundary # deprecate
-
-column(t,i) = getindex.(value(t),i)
-columns(t) = column.(Ref(value(t)),Grassmann.list(1,ndims(t)))
-
-function edges(t,cols=columns(t))
-    np,N = length(points(t)),ndims(Manifold(t)); M = points(t)(N-1:N...)
-    A = spzeros(np,np)
-    for c ∈ Grassmann.combo(N,2)
-        A += sparse(cols[c[1]],cols[c[2]],1,np,np)
-    end
-    f = findall(x->x>0,LinearAlgebra.triu(A+transpose(A)))
-    [Chain{M,1}(SVector{2,Int}(f[n].I)) for n ∈ 1:length(f)]
-end
 
 function edgesindices(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
     e = edges(t,cols); i,j,k = cols
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
     V = ChainBundle(means(e,points(t))); A += A'
-    e,[Chain{V,2}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
+    e,[Chain{V,1}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
 end
 
-edgelengths(e) = value.(abs.(getindex.(diff.(getindex.(Ref(DirectSum.supermanifold(Manifold(e))),value.(e))),1)))
+const edgelengths = volumes # deprecate
 
 function neighbor(k,a,b)::Int
     n = setdiff(intersect(a,b),k)
@@ -274,7 +261,7 @@ function neighbors(T)
     for i ∈ 1:nt
         n2e[value(t[i]),i] .= (1,1,1)
     end
-    V,f = SubManifold(ℝ^3),(x->x>0)
+    V,f = Manifold(Manifold(T)),(x->x>0)
     n = Chain{V,1,Int,3}[]; resize!(n,nt)
     @threads for k ∈ 1:nt
         tk = t[k]
@@ -284,15 +271,8 @@ function neighbors(T)
     return n
 end
 
-basetransform(t::ChainBundle) = basetransform(value(t))
-function basetransform(t,i=getindex.(t,1),j=getindex.(t,2),k=getindex.(t,3))
-    nt,p = length(t),points(t)
-    M,A = Manifold(p)(2,3),p[i]
-    Chain{M,1}.(SVector.(M.(p[j]-A),M.(p[k]-A)))
-end
-
 function basisnedelec(p)
-    M = ℝ^3; V = M(2,3)
+    M = ℝ^3; V = ↓(M)
     Chain{M,1}(
         Chain{V,1}(-p[2],p[1]),
         Chain{V,1}(-p[2],p[1]-1),
@@ -300,11 +280,10 @@ function basisnedelec(p)
 end
 
 function nedelecmean(t,t2e,signs,u)
-    base = basetransform(t)
-    B = revrot.(base,revrot)./getindex.(.∧(value.(base)),1)
+    base = Grassmann.vectors(t)
+    B = revrot.(base,revrot)./column(.∧(value.(base)))
     N = basisnedelec(ones(2)/3)
-    x,y,z = getindex.(t2e,1),getindex.(t2e,2),getindex.(t2e,3)
-    X,Y,Z = getindex.(signs,1),getindex.(signs,2),getindex.(signs,3)
+    x,y,z = columns(t2e); X,Y,Z = columns(signs)
     (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
 end
 
@@ -319,8 +298,8 @@ function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
     elseif N == 3
         ds,dn = trinormals(t) # ds.^1
         du,F = gradient(t,u,m,g),iterable(t,f)
-        fl = [-c*getindex.(value(dn[k]).⋅du[k],1) for k ∈ 1:length(du)]
-        i,j,k = getindex.(value(t),1),getindex.(value(t),2),getindex.(value(t),3)
+        fl = [-c*column(value(dn[k]).⋅du[k]) for k ∈ 1:length(du)]
+        i,j,k = columns(t)
         intj = sparse(j,k,1,np,np)+sparse(k,i,1,np,np)+sparse(i,j,1,np,np)
         intj = round.((intj+transpose(intj))/3)
         jmps = sparse(j,k,getindex.(fl,1),np,np)+sparse(k,i,getindex.(fl,2),np,np)+sparse(i,j,getindex.(fl,3),np,np)
