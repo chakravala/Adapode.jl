@@ -5,9 +5,10 @@
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
-export solvepoisson, solveSD, solvedirichlet, boundary, interior, trilength, trinormals
+export solvepoisson, solveSD, solvetransport, solvedirichlet, adaptpoisson
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
-export submesh, detsimplex, iterable, callable, value, edgelengths, adaptpoisson
+export submesh, detsimplex, iterable, callable, value, edgelengths
+export boundary, interior, trilength, trinormals
 import Grassmann: norm, column, columns, points, pointset, edges
 using Base.Threads
 
@@ -22,12 +23,12 @@ using Base.Threads
 for T ∈ (:SVector,:MVector)
     @eval function assemblelocal!(M,mat::SMatrix{N,N},m,tk::$T{N}) where N
         for i ∈ 1:N, j∈ 1:N
-            M[tk[i],tk[j]] += mat[i,j]*m[1]
+            M[tk[i],tk[j]] += mat[i,j]*m
         end
     end
 end
 
-assembleglobal(M,t,m=detsimplex(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),iterable(t,c),iterable(t,g))
+assembleglobal(M,t,m=volumes(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),iterable(t,c),iterable(t,g))
 function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
     np = length(points(t)); A = spzeros(np,np)
     for k ∈ 1:length(t)
@@ -36,42 +37,42 @@ function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:Abstract
     return A
 end
 
-assemblefunction(t,f,m=detsimplex(t)) = assemblefunction(t,iterpts(t,f),iterable(t,m))
+assemblefunction(t,f,m=volumes(t)) = assemblefunction(t,iterpts(t,f),iterable(t,m))
 function assemblefunction(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
     b,l = zeros(length(points(t))),m/ndims(Manifold(t))
     for k ∈ 1:length(t)
         tk = value(t[k])
-        b[tk] .+= f[tk]*l[k][1]
+        b[tk] .+= f[tk]*l[k]
     end
     return b
 end
 
-assemblemassfunction(t,f,m=detsimplex(t),L=m) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,L))
+assemblemassfunction(t,f,m=volumes(t),L=m) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,L))
 function assemblemassfunction(t,f::F,m::V,L::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
     np,N = length(points(t)),ndims(Manifold(t))
     M,b,n,l = spzeros(np,np), zeros(np), Val(N), L/N
     for k ∈ 1:length(t)
         tk = value(t[k])
         assemblelocal!(M,mass(nothing,nothing,n),m[k],tk)
-        b[tk] .+= f[tk]*l[k][1]
+        b[tk] .+= f[tk]*l[k]
     end
     return M,b
 end
 
-assembleload(t,l=detsimplex(t)) = assemblefunction(t,1,l)
-assemblemassload(t,m=detsimplex(t),l=m) = assemblemassfunction(t,1,m,l)
+assembleload(t,l=volumes(t)) = assemblefunction(t,1,l)
+assemblemassload(t,m=volumes(t),l=m) = assemblemassfunction(t,1,m,l)
 
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
-assemblemass(t,m=detsimplex(t)) = assembleglobal(mass,t,iterpts(t,m))
+assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 
 revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 
-function gradienthat(t,m=detsimplex(t))
+function gradienthat(t,m=volumes(t))
     N = ndims(Manifold(t))
     if N == 2
-        inv.(column(m))
+        inv.(m)
     elseif N == 3
-        h = curls(t)./2column(m)
+        h = curls(t)./2m
         V = Manifold(h); V2 = ↓(V)
         [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
     else
@@ -97,7 +98,7 @@ function gradientCR(g::Chain{V}) where V
         Chain{V,1}(1,1,-1)))
 end
 
-gradient(t,u,m=detsimplex(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
+gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
 
 function interp(t,ut)
     np,nt = length(points(t)),length(t)
@@ -112,7 +113,7 @@ function assembledivergence(t,m,g)
     p = points(t); np,nt = length(p),length(t)
     D1,D2 = spzeros(nt,np), spzeros(nt,np)
     for k ∈ 1:length(t)
-        tk,gm = value(t[k]),g[k]*m[k][1]
+        tk,gm = value(t[k]),g[k]*m[k]
         for i ∈ 1:ndims(Manifold(t))
             D1[k,tk[i]] = gm[i][1]
             D2[k,tk[i]] = gm[i][2]
@@ -129,7 +130,7 @@ function stiffness(c,g,::Val{N}) where N
     end
     return SMatrix{N,N,typeof(c)}(A)
 end
-assemblestiffness(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
+assemblestiffness(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
 function sonicstiffness(c,g,::Val{N}) where N
@@ -139,14 +140,16 @@ function sonicstiffness(c,g,::Val{N}) where N
     end
     return SMatrix{N,N,typeof(c)}(A)
 end
-assemblesonic(t,c=1,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
+assemblesonic(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
 convection(b,g,::Val{3}) = ones(SVector{3,Int})*column((b/3).⋅value(g))'
-assembleconvection(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(convection,t,m,b,g)
+convection(b,g,::Val{N}) where N = ones(SVector{N,Int})*column((b/N).⋅value(g))'
+assembleconvection(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(convection,t,m,b,g)
 
 SD(b,g,::Val{3}) = (x=column(b.⋅value(g));x*x')
-assembleSD(t,b,m=detsimplex(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
+SD(b,g,::Val) = (x=column(b.⋅value(g));x*x')
+assembleSD(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
 
 function nedelec(λ,g,v::Val{3})
     f = stiffness(λ,g,v)
@@ -159,32 +162,21 @@ function nedelec(λ,g,v::Val{3})
     @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
 end
 
-function robinmass(c::Vector{Chain{V,G,T,X}} where {G,T,X},κ::F,a,::Val{1}) where {V,F<:Function}
-    p = Grassmann.isbundle(V) ? V : DirectSum.supermanifold(V)
-    [Chain{Manifold(p),0,Float64}((κ(a[k]),)) for k ∈ 1:length(c)]
-end
-function robinmass(c::Vector{Chain{V,G,T,X}} where {G,T,X},κ::F,a,::Val{2}) where {V,F<:Function}
-    [Chain(κ(a[k])*abs(2a[k])) for k ∈ 1:length(c)] # abs(pk[1]-pk[2])
-end
-robinmass(c::ChainBundle,κ::F,a) where F<:Function = robinmass(value(c),κ,a,Val{ndims(c)}())
-robinmass(c,κ,a=means(m)) = robinmass(c,callable(κ),a)
-robinload(c,m,gD::D,gN::N,a) where {D<:Function,N<:Function} = [m[k]*gD(a[k])+gN(a[k]) for k ∈ 1:length(c)]
-robinload(c,m,gD,gN,a=means(m)) = robinload(c,m,callable(gD),callable(gN),a)
-
-function assemble(t,c=1,a=1,f=0,m=detsimplex(t),g=gradienthat(t,m))
+function assemble(t,c=1,a=1,f=0,m=volumes(t),g=gradienthat(t,m))
     M,b = assemblemassfunction(t,f,isone(a) ? m : a.*m,m)
     return assemblestiffness(t,c,m,g),M,b
 end
 
 function assemblerobin(e,κ=1e6,gD=0,gN=0)
     a = means(e)
-    m = robinmass(e,κ,a)
-    l = robinload(e,m,gD,gN,a)
-    return assemblemassload(e,m,l)
+    v = volumes(e)
+    m = iterable(a,κ)
+    l = m.*iterable(a,gD).+iterable(a,gN)
+    return assemblemassload(e,m.*v,l.*v)
 end
 
 function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
-    m = detsimplex(t)
+    m = volumes(t)
     b = assemblefunction(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
@@ -192,7 +184,7 @@ function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
 end
 
 function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
-    m = detsimplex(t)
+    m = volumes(t)
     g = gradienthat(t,m)
     A = assemblestiffness(t,c,m,g)
     b = means(t,f)
@@ -202,10 +194,19 @@ function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
     return (A+R-C'+Sd)\r
 end
 
+function solvetransport(t,e,c,ϵ=0.1)
+    m = volumes(t)
+    g = gradienthat(t,m)
+    A = assemblestiffness(t,ϵ,m,g)
+    b = assembleload(t,m)
+    C = assembleconvection(t,c,m,g)
+    return solvedirichlet(A+C,b,e)
+end
+
 function adaptpoisson(g,p,e,t,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
     ϵ = 1.0
     while ϵ > 5e-5 && length(t) < 10000
-        m = detsimplex(t)
+        m = volumes(t)
         h = gradienthat(t,m)
         A,M,b = assemble(t,c,a,f,m,h)
         ξ = solvedirichlet(A+M,b,e)
@@ -217,8 +218,8 @@ function adaptpoisson(g,p,e,t,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
     return g,p,e,t
 end
 
-solvedirichlet(M,b,e::ChainBundle) = solvedirichlet(M,b,boundary(e))
-solvedirichlet(M,b,e::ChainBundle,u) = solvedirichlet(M,b,boundary(e),u)
+solvedirichlet(M,b,e::ChainBundle) = solvedirichlet(M,b,pointset(e))
+solvedirichlet(M,b,e::ChainBundle,u) = solvedirichlet(M,b,pointset(e),u)
 function solvedirichlet(A,b,fixed,boundary)
     neq = length(b)
     free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
@@ -272,7 +273,7 @@ function neighbors(T)
 end
 
 function basisnedelec(p)
-    M = ℝ^3; V = ↓(M)
+    M = SubManifold(ℝ^3); V = ↓(M)
     Chain{M,1}(
         Chain{V,1}(-p[2],p[1]),
         Chain{V,1}(-p[2],p[1]-1),
@@ -282,18 +283,18 @@ end
 function nedelecmean(t,t2e,signs,u)
     base = Grassmann.vectors(t)
     B = revrot.(base,revrot)./column(.∧(value.(base)))
-    N = basisnedelec(ones(2)/3)
-    x,y,z = columns(t2e); X,Y,Z = columns(signs)
+    N = basisnedelec(SVector(1,1)/3)
+    x,y,z = columns(t2e); X,Y,Z = columns(signs,1,3)
     (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
 end
 
-function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
+function jumps(t,c,a,f,u,m=volumes(t),g=gradienthat(t,m))
     N,np,nt = ndims(Manifold(t)),length(points(t)),length(t)
     η = zeros(nt)
     if N == 2
         fau = iterable(points(t),f).-a*u
         @threads for i ∈ 1:nt
-            η[i] = m[i][1]*sqrt((fau[i]^2+fau[i+1]^2)*m[i][1]/2)
+            η[i] = m[i]*sqrt((fau[i]^2+fau[i+1]^2)*m[i]/2)
         end
     elseif N == 3
         ds,dn = trinormals(t) # ds.^1
@@ -308,7 +309,7 @@ function jumps(t,c,a,f,u,m=detsimplex(t),g=gradienthat(t,m))
             tk,dsk = t[k],ds[k]
             η[k] = sqrt(((dsk[3]*jmps[tk[1],tk[2]])^2+(dsk[1]*jmps[tk[2],tk[3]])^2+(dsk[2]*jmps[tk[3],tk[1]])^2)/2)
         end
-        η += [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k][1]) for k ∈ 1:nt].*maximum.(ds)
+        η += [sqrt(norm(F[k].-a*u[value(t[k])])/3m[k]) for k ∈ 1:nt].*maximum.(ds)
     else
         throw(error("jumps on Manifold{$N} not defined"))
     end

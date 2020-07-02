@@ -27,6 +27,19 @@ Lorenz(x::Chain{V}) where V = Chain{V,1}(
 	x[2]*x[3]-(8/3)*x[4])
 lines(Point.((V(2,3,4)).(odesolve(Lorenz,x0))))
 ```
+Supported ODE solvers include:
+explicit Euler,
+Heun's method (improved Euler),
+Midpoint 2nd order RK,
+Kutta's 3rd order RK,
+classical 4th order Runge-Kuta,
+adaptive Heun-Euler,
+adaptive Bogacki-Shampine RK23,
+adaptive Fehlberg RK45,
+adaptive Cash-Karp RK45,
+adaptive Dormand-Prince RK45,
+multistep Adams-Bashforth-Moulton 2nd,3rd,4th,5th order,
+adaptive multistep ABM 2nd,3rd,4th,5th order.
 
 It is possible to work with L2 projection on a mesh with
 ```julia
@@ -39,12 +52,34 @@ Partial differential equations can also be assembled with various additional met
 ```julia
 PoissonSolver(p,e,t,c,f,κ,gD=1,gN=0) = mesh(t,color=solvepoisson(t,e,c,f,κ,gD,gN))
 function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
-    m = detsimplex(t)
+    m = volumes(t)
     b = assemblefunction(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
     return (A+R)\(b+r)
 end
+function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
+    m = volumes(t)
+    g = gradienthat(t,m)
+    A = assemblestiffness(t,c,m,g)
+    b = means(t,f)
+    C = assembleconvection(t,b,m,g)
+    Sd = assembleSD(t,sqrt(δ)*b,m,g)
+    R,r = assemblerobin(e,κ,gD,gN)
+    return (A+R-C'+Sd)\r
+end
+function solvetransport(t,e,c,ϵ=0.1)
+    m = volumes(t)
+    g = gradienthat(t,m)
+    A = assemblestiffness(t,ϵ,m,g)
+    b = assembleload(t,m)
+    C = assembleconvection(t,c,m,g)
+    return solvedirichlet(A+C,b,e)
+end
+```
+Such modular methods can work on input meshes of any dimension.
+The following examples are based on trivially generated 1 dimensional domains:
+```Julia
 function BackwardEulerHeat1D()
     x,m = 0:0.01:1,100; p,e,t = initmesh(x)
     T = range(0,0.5,length=m+1) # time grid
@@ -60,7 +95,7 @@ end
 function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
     ϵ = 1.0
     while ϵ > 5e-5 && length(t) < 10000
-        m = detsimplex(t)
+        m = volumes(t)
         h = gradienthat(t,m)
         A,M,b = assemble(t,c,a,f,m,h)
         ξ = solvedirichlet(A+M,b,e)
@@ -79,4 +114,5 @@ function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
 end
 PoissonAdaptive(refinemesh(0:0.25:1)...,1,0,x->exp(-100abs2(x[2]-0.5)))
 ```
-More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources. These methods can automatically generalize to higher dimensional manifolds and is compatible with discrete differential geometry.
+More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources.
+These methods can automatically generalize to higher dimensional manifolds and are compatible with discrete differential geometry.
