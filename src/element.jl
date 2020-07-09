@@ -100,14 +100,10 @@ end
 
 gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
 
-function interp(t,ut)
-    np,nt = length(points(t)),length(t)
-    A = spzeros(np,nt)
-    for i ∈ 1:ndims(Manifold(t))
-        A += sparse(column(t,i),1:nt,1,np,nt)
-    end
-    sparse(1:np,1:np,inv.(sum(A,dims=2))[:],np,np)*A*ut
-end
+interp(t,ut,A=interp(t)) = A*ut
+interp(t,A::SparseMatrixCSC=incidence(t)) = Diagonal(inv.(degrees(t,A)))*A
+pretni(t,A::SparseMatrixCSC=incidence(t)) = interp(t,sparse(A'))
+pretni(t,ut,A=pretni(t)) = A*ut
 
 function assembledivergence(t,m,g)
     p = points(t); np,nt = length(p),length(t)
@@ -126,7 +122,7 @@ stiffness(c,g,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
 function stiffness(c,g,::Val{N}) where N
     A = zeros(MMatrix{N,N,typeof(c)})
     for i ∈ 1:N, j ∈ 1:N
-        A[i,j] += c*(g[i]⋅g[j])[1]
+        A[i,j] = c*(g[i]⋅g[j])[1]
     end
     return SMatrix{N,N,typeof(c)}(A)
 end
@@ -136,7 +132,7 @@ assemblestiffness(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffn
 function sonicstiffness(c,g,::Val{N}) where N
     A = zeros(MMatrix{N,N,typeof(c)})
     for i ∈ 1:N, j ∈ 1:N
-        A[i,j] += c*g[i][1]^2+g[j][2]^2
+        A[i,j] = c*g[i][1]^2+g[j][2]^2
     end
     return SMatrix{N,N,typeof(c)}(A)
 end
@@ -234,12 +230,13 @@ function solvedirichlet(M,b,fixed)
     return ξ
 end
 
-const boundary = pointset # deprecate
 interior(e) = interior(length(points(e)),pointset(e))
 interior(fixed,neq) = sort!(setdiff(1:neq,fixed))
 solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
-const solveboundary = solvedirichlet
-export solvehomogenous, solveboundary # deprecate
+export solvehomogenous, solveboundary
+const solveboundary = solvedirichlet # deprecate
+const edgelengths = volumes # deprecate
+const boundary = pointset # deprecate
 
 function edgesindices(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
@@ -249,20 +246,13 @@ function edgesindices(t,cols=columns(t))
     e,[Chain{V,1}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
 end
 
-const edgelengths = volumes # deprecate
-
 function neighbor(k,a,b)::Int
     n = setdiff(intersect(a,b),k)
     isempty(n) ? 0 : n[1]
 end
 
-function neighbors(T)
-    np,nt,t = length(points(T)),length(T),value(T)
-    n2e = spzeros(np,nt) # node-to-element adjacency matrix, n2e[i,j]==1 -> i ∈ j
-    for i ∈ 1:nt
-        n2e[value(t[i]),i] .= (1,1,1)
-    end
-    V,f = Manifold(Manifold(T)),(x->x>0)
+function neighbors(t,n2e=incidence(t))
+    V,f,nt = Manifold(Manifold(t)),(x->x>0),length(t)
     n = Chain{V,1,Int,3}[]; resize!(n,nt)
     @threads for k ∈ 1:nt
         tk = t[k]
@@ -270,6 +260,18 @@ function neighbors(T)
         n[k] = Chain{V,1}(neighbor(k,b,c),neighbor(k,c,a),neighbor(k,a,b))
     end
     return n
+end
+
+function centroidvectors(t,m=means(t))
+    p,nt = points(t),length(t)
+    V = Manifold(p)(2,3)
+    c = Vector{SizedVector{3,Chain{V,1,Float64,2}}}(undef,nt)
+    δ = Vector{SizedVector{3,Float64}}(undef,nt)
+    for k ∈ 1:nt
+        c[k] = V.(m[k].-p[value(t[k])])
+        δ[k] = value.(abs.(c[k]))
+    end
+    return c,δ
 end
 
 function basisnedelec(p)
@@ -298,12 +300,11 @@ function jumps(t,c,a,f,u,m=volumes(t),g=gradienthat(t,m))
         end
     elseif N == 3
         ds,dn = trinormals(t) # ds.^1
-        du,F = gradient(t,u,m,g),iterable(t,f)
+        du,F,cols = gradient(t,u,m,g),iterable(t,f),columns(t)
         fl = [-c*column(value(dn[k]).⋅du[k]) for k ∈ 1:length(du)]
-        i,j,k = columns(t)
-        intj = sparse(j,k,1,np,np)+sparse(k,i,1,np,np)+sparse(i,j,1,np,np)
-        intj = round.((intj+transpose(intj))/3)
-        jmps = sparse(j,k,getindex.(fl,1),np,np)+sparse(k,i,getindex.(fl,2),np,np)+sparse(i,j,getindex.(fl,3),np,np)
+        intj = round.(adjacency(t,cols)/3)
+        i,j,k = cols; x,y,z = getindex.(fl,1),getindex.(fl,2),getindex.(fl,3)
+        jmps = sparse(j,k,x,np,np)+sparse(k,i,y,np,np)+sparse(i,j,z,np,np)
         jmps = abs.(intj.*abs.(jmps+jmps'))
         @threads for k = 1:nt
             tk,dsk = t[k],ds[k]
