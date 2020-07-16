@@ -20,6 +20,58 @@ using Base.Threads
 @inline callable(c::F) where F<:Function = c
 @inline callable(c) = x->c
 
+revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
+
+function gradienthat(t,m=volumes(t))
+    N = ndims(Manifold(t))
+    if N == 2
+        inv.(m)
+    elseif N == 3
+        h = curls(t)./2m
+        V = Manifold(h); V2 = ↓(V)
+        [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
+    else
+        Grassmann.grad.(points(t)[value(t)])
+    end
+end
+
+trilength(rc) = value.(abs.(value(rc)))
+function trinormals(t)
+    c = curls(t)
+    ds = trilength.(c)
+    V = Manifold(c); V2 = ↓(V)
+    dn = [Chain{V,1}(revrot.(V2.(value(c[k]))./-ds[k])) for k ∈ 1:length(c)]
+    return ds,dn
+end
+
+gradientCR(t,m) = gradientCR(gradienthat(t,m))
+gradientCR(g) = gradientCR.(g)
+function gradientCR(g::Chain{V}) where V
+    Chain{V,1}(g.⋅SVector(
+        Chain{V,1}(-1,1,1),
+        Chain{V,1}(1,-1,1),
+        Chain{V,1}(1,1,-1)))
+end
+
+laplacian(t,u,m=volumes(t),g=gradienthat(t,m)) = value.(abs.(gradient(t,u,m,g)))
+gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
+
+interp(t,ut,A::SparseMatrixCSC) = A*ut
+interp(t,A::SparseMatrixCSC=incidence(t)) = Diagonal(inv.(degrees(t,A)))*A
+pretni(t,A::SparseMatrixCSC=incidence(t)) = interp(t,sparse(A'))
+pretni(t,ut,A=pretni(t)) = A*ut
+
+degrees(t) = assembleload(t,ndims(t))
+interp(t,f,m=degrees(t)) = interp(t,iterpts(t,f),iterable(t,m))
+function interp(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
+    b = zeros(length(points(t)))
+    for k ∈ value(t)
+        tk = value(k)
+        b[tk] .+= f[tk]./m[tk]
+    end
+    return b
+end
+
 for T ∈ (:SVector,:MVector)
     @eval function assemblelocal!(M,mat::SMatrix{N,N},m,tk::$T{N}) where N
         for i ∈ 1:N, j∈ 1:N
@@ -65,59 +117,6 @@ assemblemassload(t,m=volumes(t),l=m) = assemblemassfunction(t,1,m,l)
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 
-revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
-
-function gradienthat(t,m=volumes(t))
-    N = ndims(Manifold(t))
-    if N == 2
-        inv.(m)
-    elseif N == 3
-        h = curls(t)./2m
-        V = Manifold(h); V2 = ↓(V)
-        [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
-    else
-        Grassmann.grad.(points(t)[value(t)])
-    end
-end
-
-trilength(rc) = value.(abs.(value(rc)))
-function trinormals(t)
-    c = curls(t)
-    ds = trilength.(c)
-    V = Manifold(c); V2 = ↓(V)
-    dn = [Chain{V,1}(revrot.(V2.(value(c[k]))./-ds[k])) for k ∈ 1:length(c)]
-    return ds,dn
-end
-
-gradientCR(t,m) = gradientCR(gradienthat(t,m))
-gradientCR(g) = gradientCR.(g)
-function gradientCR(g::Chain{V}) where V
-    Chain{V,1}(g.⋅SVector(
-        Chain{V,1}(-1,1,1),
-        Chain{V,1}(1,-1,1),
-        Chain{V,1}(1,1,-1)))
-end
-
-gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
-
-interp(t,ut,A=interp(t)) = A*ut
-interp(t,A::SparseMatrixCSC=incidence(t)) = Diagonal(inv.(degrees(t,A)))*A
-pretni(t,A::SparseMatrixCSC=incidence(t)) = interp(t,sparse(A'))
-pretni(t,ut,A=pretni(t)) = A*ut
-
-function assembledivergence(t,m,g)
-    p = points(t); np,nt = length(p),length(t)
-    D1,D2 = spzeros(nt,np), spzeros(nt,np)
-    for k ∈ 1:length(t)
-        tk,gm = value(t[k]),g[k]*m[k]
-        for i ∈ 1:ndims(Manifold(t))
-            D1[k,tk[i]] = gm[i][1]
-            D2[k,tk[i]] = gm[i][2]
-        end
-    end
-    return D1,D2
-end
-
 stiffness(c,g,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
 function stiffness(c,g,::Val{N}) where N
     A = zeros(MMatrix{N,N,typeof(c)})
@@ -147,15 +146,17 @@ SD(b,g,::Val{3}) = (x=column(b.⋅value(g));x*x')
 SD(b,g,::Val) = (x=column(b.⋅value(g));x*x')
 assembleSD(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
 
-function nedelec(λ,g,v::Val{3})
-    f = stiffness(λ,g,v)
-    m11 = (f[3,3]-f[2,3]+f[2,2])/6
-    m22 = (f[1,1]-f[1,3]+f[3,3])/6
-    m33 = (f[2,2]-f[1,2]+f[1,1])/6
-    m12 = (f[3,1]-f[3,3]-2f[2,1]+f[2,3])/12
-    m13 = (f[3,2]-2f[3,1]-f[2,2]+f[2,1])/12
-    m23 = (f[1,2]-f[1,1]-2f[3,2]+f[3,1])/12
-    @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
+function assembledivergence(t,m,g)
+    p = points(t); np,nt = length(p),length(t)
+    D1,D2 = spzeros(nt,np), spzeros(nt,np)
+    for k ∈ 1:length(t)
+        tk,gm = value(t[k]),g[k]*m[k]
+        for i ∈ 1:ndims(Manifold(t))
+            D1[k,tk[i]] = gm[i][1]
+            D2[k,tk[i]] = gm[i][2]
+        end
+    end
+    return D1,D2
 end
 
 function assemble(t,c=1,a=1,f=0,m=volumes(t),g=gradienthat(t,m))
@@ -238,26 +239,37 @@ const solveboundary = solvedirichlet # deprecate
 const edgelengths = volumes # deprecate
 const boundary = pointset # deprecate
 
+facesindices(t,cols=columns(t)) = ndims(t) == 3 ? edgesindices(t,cols) : throw(error())
+
 function edgesindices(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
     e = edges(t,cols); i,j,k = cols
     A = sparse(getindex.(e,1),getindex.(e,2),1:length(e),np,np)
     V = ChainBundle(means(e,points(t))); A += A'
-    e,[Chain{V,1}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
+    e,[Chain{V,2}(A[j[n],k[n]],A[i[n],k[n]],A[i[n],j[n]]) for n ∈ 1:nt]
 end
 
-function neighbor(k,a,b)::Int
-    n = setdiff(intersect(a,b),k)
+function neighbor(k::Int,ab...)::Int
+    n = setdiff(intersect(ab...),k)
     isempty(n) ? 0 : n[1]
 end
 
+@generated function neighbors(A::SparseMatrixCSC,V,tk,k)
+    N,F = ndims(Manifold(V)),(x->x>0)
+    N1 = Grassmann.list(1,N)
+    x = SVector{N}([Symbol(:x,i) for i ∈ N1])
+    f = SVector{N}([:(findall($F,A[:,tk[$i]])) for i ∈ N1])
+    b = SVector{N}([Expr(:call,:neighbor,:k,x[setdiff(N1,i)]...) for i ∈ N1])
+    Expr(:block,Expr(:(=),Expr(:tuple,x...),Expr(:tuple,f...)),
+        Expr(:call,:(Chain{V,1}),b...))
+end
+
 function neighbors(t,n2e=incidence(t))
-    V,f,nt = Manifold(Manifold(t)),(x->x>0),length(t)
-    n = Chain{V,1,Int,3}[]; resize!(n,nt)
+    V,A = Manifold(Manifold(t)),sparse(n2e')
+    nt = length(t)
+    n = Chain{V,1,Int,ndims(V)}[]; resize!(n,nt)
     @threads for k ∈ 1:nt
-        tk = t[k]
-        a,b,c = findall(f,n2e[tk[1],:]),findall(f,n2e[tk[2],:]),findall(f,n2e[tk[3],:])
-        n[k] = Chain{V,1}(neighbor(k,b,c),neighbor(k,c,a),neighbor(k,a,b))
+        n[k] = neighbors(A,V,t[k],k)
     end
     return n
 end
@@ -272,6 +284,17 @@ function centroidvectors(t,m=means(t))
         δ[k] = value.(abs.(c[k]))
     end
     return c,δ
+end
+
+function nedelec(λ,g,v::Val{3})
+    f = stiffness(λ,g,v)
+    m11 = (f[3,3]-f[2,3]+f[2,2])/6
+    m22 = (f[1,1]-f[1,3]+f[3,3])/6
+    m33 = (f[2,2]-f[1,2]+f[1,1])/6
+    m12 = (f[3,1]-f[3,3]-2f[2,1]+f[2,3])/12
+    m13 = (f[3,2]-2f[3,1]-f[2,2]+f[2,1])/12
+    m23 = (f[1,2]-f[1,1]-2f[3,2]+f[3,1])/12
+    @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
 end
 
 function basisnedelec(p)
