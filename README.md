@@ -100,11 +100,11 @@ function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
         A,M,b = assemble(t,c,a,f,m,h)
         ξ = solvedirichlet(A+M,b,e)
         η = jumps(t,c,a,f,ξ,m,h)
-        scene = mesh(t,color=ξ,shading=false); display(scene)
+        display(mesh(t,color=ξ,shading=false))
         if typeof(g)<:AbstractRange
             scatter!(p,ξ,markersize=0.01)
         else
-            wireframe!(scene[end][1],color=(:red,0.6),linewidth=3)
+            wireframe!(t,color=(:red,0.6),linewidth=3)
         end
         ϵ = sqrt(norm(η)^2/length(η))
         println(t,", ϵ=$ϵ, α=$(ϵ/maximum(η))"); sleep(0.5)

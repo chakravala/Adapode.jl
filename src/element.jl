@@ -7,8 +7,8 @@ export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
 export solvepoisson, solveSD, solvetransport, solvedirichlet, adaptpoisson
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
-export submesh, detsimplex, iterable, callable, value, edgelengths
-export boundary, interior, trilength, trinormals
+export submesh, detsimplex, iterable, callable, value, edgelengths, laplacian
+export boundary, interior, trilength, trinormals, incidence, degrees
 import Grassmann: norm, column, columns, points, pointset, edges
 using Base.Threads
 
@@ -56,22 +56,6 @@ end
 laplacian(t,u,m=volumes(t),g=gradienthat(t,m)) = value.(abs.(gradient(t,u,m,g)))
 gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
 
-interp(t,ut,A::SparseMatrixCSC) = A*ut
-interp(t,A::SparseMatrixCSC=incidence(t)) = Diagonal(inv.(degrees(t,A)))*A
-pretni(t,A::SparseMatrixCSC=incidence(t)) = interp(t,sparse(A'))
-pretni(t,ut,A=pretni(t)) = A*ut
-
-degrees(t) = assembleload(t,ndims(t))
-interp(t,f,m=degrees(t)) = interp(t,iterpts(t,f),iterable(t,m))
-function interp(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
-    b = zeros(length(points(t)))
-    for k ∈ value(t)
-        tk = value(k)
-        b[tk] .+= f[tk]./m[tk]
-    end
-    return b
-end
-
 for T ∈ (:SVector,:MVector)
     @eval function assemblelocal!(M,mat::SMatrix{N,N},m,tk::$T{N}) where N
         for i ∈ 1:N, j∈ 1:N
@@ -89,30 +73,56 @@ function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:Abstract
     return A
 end
 
-assemblefunction(t,f,m=volumes(t)) = assemblefunction(t,iterpts(t,f),iterable(t,m))
-function assemblefunction(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
-    b,l = zeros(length(points(t))),m/ndims(Manifold(t))
-    for k ∈ 1:length(t)
-        tk = value(t[k])
-        b[tk] .+= f[tk]*l[k]
+weights(t,d::Vector=degrees(t)) = inv.(d)
+weights(t,B::SparseMatrixCSC) = inv.(degrees(t,f))
+degrees(t,B::SparseMatrixCSC) = B*ones(Int,length(t)) # A = incidence(t)
+function degrees(t,f=nothing)
+    b = zeros(Int,length(points(t)))
+    for tk ∈ value(t)
+        b[value(tk)] .+= 1
     end
     return b
 end
 
-assemblemassfunction(t,f,m=volumes(t),L=m) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,L))
-function assemblemassfunction(t,f::F,m::V,L::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
-    np,N = length(points(t)),ndims(Manifold(t))
-    M,b,n,l = spzeros(np,np), zeros(np), Val(N), L/N
+assembleincidence(t,f,B::SparseMatrixCSC) = Diagonal(iterpts(t,f))*B
+assembleincidence(t,f,m=volumes(t)) = assembleincidence(t,iterpts(t,f),iterable(t,m))
+function assembleincidence(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
+    b = zeros(eltype(f),length(points(t)))
+    for k ∈ 1:length(t)
+        tk = value(t[k])
+        b[tk] .+= f[tk]*m[k]
+    end
+    return b
+end
+function incidence(t,cols=columns(t))
+    np,nt = length(points(t)),length(t)
+    A = spzeros(Int,np,nt)
+    for i ∈ Grassmann.list(1,ndims(Manifold(t)))
+        A += sparse(cols[i],1:nt,1,np,nt)
+    end
+    return A
+end # node-element incidence, A[i,j]=1 -> i∈t[j]
+
+assemblemassfunction(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,l),iterpts(t,d))
+function assemblemassfunction(t,f::F,m::V,l::T,d::D) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector,D<:AbstractVector}
+    np,n = length(points(t)),Val(ndims(Manifold(t)))
+    M,b,v = spzeros(np,np), zeros(np), f./d
     for k ∈ 1:length(t)
         tk = value(t[k])
         assemblelocal!(M,mass(nothing,nothing,n),m[k],tk)
-        b[tk] .+= f[tk]*l[k]
+        b[tk] .+= v[tk]*l[k]
     end
     return M,b
 end
 
-assembleload(t,l=volumes(t)) = assemblefunction(t,1,l)
-assemblemassload(t,m=volumes(t),l=m) = assemblemassfunction(t,1,m,l)
+assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,f./d,m)
+assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m)
+assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,1,m,l,d)
+
+interp(t) = assembleload(t,incidence(t))
+interp(t,b,d=degrees(t,b)) = assembleload(t,b,d)
+pretni(t,B::SparseMatrixCSC=incidence(t)) = assembleload(t,sparse(B'))
+pretni(t,ut,B=pretni(t)) = B*ut #interp(t,ut,B::SparseMatrixCSC) = B*ut
 
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
