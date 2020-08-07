@@ -24,8 +24,11 @@ revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 
 function gradienthat(t,m=volumes(t))
     N = ndims(Manifold(t))
-    if N == 2
-        inv.(m)
+    if N == 2 #inv.(m)
+        V = Manifold(points(t))
+        i = inv.(m)
+        c = Chain{↓(V),1}.(inv.(m))
+        Chain{V,1}.(-c,c)
     elseif N == 3
         h = curls(t)./2m
         V = Manifold(h); V2 = ↓(V)
@@ -86,11 +89,11 @@ end
 
 assembleincidence(t,f,B::SparseMatrixCSC) = Diagonal(iterpts(t,f))*B
 assembleincidence(t,f,m=volumes(t)) = assembleincidence(t,iterpts(t,f),iterable(t,m))
-function assembleincidence(t,f::F,m::V) where {F<:AbstractVector,V<:AbstractVector}
-    b = zeros(eltype(f),length(points(t)))
+function assembleincidence(t,f::F,m::V,::Val{T}=Val{false}()) where {F<:AbstractVector,V<:AbstractVector,T}
+    b = zeros(eltype(T ? m : f),length(points(t)))
     for k ∈ 1:length(t)
         tk = value(t[k])
-        b[tk] .+= f[tk]*m[k]
+        b[tk] .+= f[tk].*m[k]
     end
     return b
 end
@@ -116,7 +119,7 @@ function assemblemassfunction(t,f::F,m::V,l::T,d::D) where {F<:AbstractVector,V<
 end
 
 assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,f./d,m)
-assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m)
+assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m,Val{true}())
 assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,1,m,l,d)
 
 interp(t) = assembleload(t,incidence(t))
@@ -127,7 +130,7 @@ pretni(t,ut,B=pretni(t)) = B*ut #interp(t,ut,B::SparseMatrixCSC) = B*ut
 mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 
-stiffness(c,g,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
+stiffness(c,g::Float64,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
 function stiffness(c,g,::Val{N}) where N
     A = zeros(MMatrix{N,N,typeof(c)})
     for i ∈ 1:N, j ∈ 1:N
@@ -148,11 +151,9 @@ end
 assemblesonic(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
-convection(b,g,::Val{3}) = ones(SVector{3,Int})*column((b/3).⋅value(g))'
 convection(b,g,::Val{N}) where N = ones(SVector{N,Int})*column((b/N).⋅value(g))'
 assembleconvection(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(convection,t,m,b,g)
 
-SD(b,g,::Val{3}) = (x=column(b.⋅value(g));x*x')
 SD(b,g,::Val) = (x=column(b.⋅value(g));x*x')
 assembleSD(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
 
