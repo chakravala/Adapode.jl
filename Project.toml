@@ -1,7 +1,7 @@
 name = "Adapode"
 uuid = "0750cfb5-909a-49d7-927e-29b6595444bf"
 authors = ["Michael Reed"]
-version = "0.2.3"
+version = "0.2.4"
 
 [deps]
 DirectSum = "22fd7b30-a8c0-5bf2-aabe-97783860d07c"
@@ -14,8 +14,8 @@ AbstractTensors = "a8e43f4a-99b7-5565-8bf1-0165161caaea"
 [compat]
 julia = "1"
 AbstractTensors = "0.5"
-DirectSum = "0.6"
-Grassmann = "0.5.17"
+DirectSum = "0.7"
+Grassmann = "0.6"
 StaticArrays = "0"
 
 [extras]

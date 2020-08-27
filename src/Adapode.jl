@@ -7,6 +7,7 @@ using StaticArrays, SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann
 import Grassmann: value, vector, valuetype
 import Base: @pure
+import AbstractTensors: SVector, MVector, SizedVector
 
 export SVector, odesolve
 export initmesh, pdegrad
