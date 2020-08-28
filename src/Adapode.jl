@@ -3,13 +3,13 @@ module Adapode
 #   This file is part of Aadapode.jl. It is licensed under the GPL license
 #   Adapode Copyright (C) 2019 Michael Reed
 
-using StaticArrays, SparseArrays, LinearAlgebra
+using SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann
 import Grassmann: value, vector, valuetype
 import Base: @pure
-import AbstractTensors: SVector, MVector, SizedVector
+import AbstractTensors: Values, Variables, FixedVector
 
-export SVector, odesolve
+export Values, odesolve
 export initmesh, pdegrad
 
 include("constants.jl")
@@ -42,7 +42,7 @@ function weights(c,fx)
     end
     return cfx
 end
-@pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = SVector{m,Int}(k:m+k-1)
+@pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = Values{m,Int}(k:m+k-1)
 @pure shift(M::Val{m},i) where {m,a} = ((shift(M,Val{0}()).+i).%(m+1)).+1
 explicit(x,h,c,fx) = (l=length(c);x+weights(h*c,l≠length(fx) ? fx[shift(Val(l))] : fx))
 explicit(x,h,c,fx,i) = (l=length(c);weights(h*c,l≠length(fx) ? fx[shift(Val(l),i)] : fx))
@@ -54,7 +54,7 @@ function butcher(x,f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A}
     b = butcher(v,a)
     n = length(b)-A
     T = typeof(x)
-    fx = T<:Vector ? SizedVector{n,T}(undef) : MVector{n,T}(undef)
+    fx = T<:Vector ? FixedVector{n,T}(undef) : Variables{n,T}(undef)
     @inbounds fx[1] = f(x)
     for k ∈ 2:n
         @inbounds fx[k] = f(explicit(x,h,b[k-1],fx))
@@ -87,7 +87,7 @@ function initsteps(x0,t,tmin,tmax)
     return x
 end
 function initsteps(x0,t,tmin,tmax,f,m::Val{o},B=Val(4)) where o
-    initsteps(x0,t,tmin,tmax), MVector{o+1,typeof(x0)}(undef)
+    initsteps(x0,t,tmin,tmax), Variables{o+1,typeof(x0)}(undef)
 end
 
 function initsteps!(x,f,fx,t,B=Val(4))

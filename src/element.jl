@@ -26,7 +26,6 @@ function gradienthat(t,m=volumes(t))
     N = ndims(Manifold(t))
     if N == 2 #inv.(m)
         V = Manifold(points(t))
-        i = inv.(m)
         c = Chain{↓(V),1}.(inv.(m))
         Chain{V,1}.(-c,c)
     elseif N == 3
@@ -50,7 +49,7 @@ end
 gradientCR(t,m) = gradientCR(gradienthat(t,m))
 gradientCR(g) = gradientCR.(g)
 function gradientCR(g::Chain{V}) where V
-    Chain{V,1}(g.⋅SVector(
+    Chain{V,1}(g.⋅Values(
         Chain{V,1}(-1,1,1),
         Chain{V,1}(1,-1,1),
         Chain{V,1}(1,1,-1)))
@@ -59,8 +58,8 @@ end
 laplacian(t,u,m=volumes(t),g=gradienthat(t,m)) = value.(abs.(gradient(t,u,m,g)))
 gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
 
-for T ∈ (:SVector,:MVector)
-    @eval function assemblelocal!(M,mat::SMatrix{N,N},m,tk::$T{N}) where N
+for T ∈ (:Values,:Variables)
+    @eval function assemblelocal!(M,mat,m,tk::$T{N}) where N
         for i ∈ 1:N, j∈ 1:N
             M[tk[i],tk[j]] += mat[i,j]*m
         end
@@ -127,21 +126,16 @@ interp(t,b,d=degrees(t,b)) = assembleload(t,b,d)
 pretni(t,B::SparseMatrixCSC=incidence(t)) = assembleload(t,sparse(B'))
 pretni(t,ut,B=pretni(t)) = B*ut #interp(t,ut,B::SparseMatrixCSC) = B*ut
 
-mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
+#mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
+mass(a,b,::Val{N}) where N = (x=SubManifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 
-stiffness(c,g::Float64,::Val{2}) = (cg = c*g^2; SMatrix{2,2,typeof(c)}(cg,-cg,-cg,cg))
-function stiffness(c,g,::Val{N}) where N
-    A = zeros(MMatrix{N,N,typeof(c)})
-    for i ∈ 1:N, j ∈ 1:N
-        A[i,j] = c*(g[i]⋅g[j])[1]
-    end
-    return SMatrix{N,N,typeof(c)}(A)
-end
+stiffness(c,g::Float64,::Val{2}) = (cg = c*g^2; Chain(Chain(cg,-cg),Chain(-cg,cg)))
+stiffness(c,g,::Val{N}) where N = Chain{SubManifold(N),1}(map.(*,c,value(g).⋅Ref(g)))
 assemblestiffness(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
-function sonicstiffness(c,g,::Val{N}) where N
+#=function sonicstiffness(c,g,::Val{N}) where N
     A = zeros(MMatrix{N,N,typeof(c)})
     for i ∈ 1:N, j ∈ 1:N
         A[i,j] = c*g[i][1]^2+g[j][2]^2
@@ -149,12 +143,14 @@ function sonicstiffness(c,g,::Val{N}) where N
     return SMatrix{N,N,typeof(c)}(A)
 end
 assemblesonic(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(sonicstiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
-# iterable(means(t),c) # mapping of c.(means(t))
+# iterable(means(t),c) # mapping of c.(means(t))=#
 
-convection(b,g,::Val{N}) where N = ones(SVector{N,Int})*column((b/N).⋅value(g))'
+#convection(b,g,::Val{N}) where N = ones(Values{N,Int})*column((b/N).⋅value(g))'
+convection(b,g,::Val{N}) where N = outer(∇,Chain(column((b/N).⋅value(g))))
 assembleconvection(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(convection,t,m,b,g)
 
-SD(b,g,::Val) = (x=column(b.⋅value(g));x*x')
+#SD(b,g,::Val) = (x=column(b.⋅value(g));x*x')
+SD(b,g,::Val) = (x=Chain(column(b.⋅value(g)));outer(x,x))
 assembleSD(t,b,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(SD,t,m,b,g)
 
 function assembledivergence(t,m,g)
@@ -268,9 +264,9 @@ end
 @generated function neighbors(A::SparseMatrixCSC,V,tk,k)
     N,F = ndims(Manifold(V)),(x->x>0)
     N1 = Grassmann.list(1,N)
-    x = SVector{N}([Symbol(:x,i) for i ∈ N1])
-    f = SVector{N}([:(findall($F,A[:,tk[$i]])) for i ∈ N1])
-    b = SVector{N}([Expr(:call,:neighbor,:k,x[setdiff(N1,i)]...) for i ∈ N1])
+    x = Values{N}([Symbol(:x,i) for i ∈ N1])
+    f = Values{N}([:(findall($F,A[:,tk[$i]])) for i ∈ N1])
+    b = Values{N}([Expr(:call,:neighbor,:k,x[setdiff(N1,i)]...) for i ∈ N1])
     Expr(:block,Expr(:(=),Expr(:tuple,x...),Expr(:tuple,f...)),
         Expr(:call,:(Chain{V,1}),b...))
 end
@@ -288,8 +284,8 @@ end
 function centroidvectors(t,m=means(t))
     p,nt = points(t),length(t)
     V = Manifold(p)(2,3)
-    c = Vector{SizedVector{3,Chain{V,1,Float64,2}}}(undef,nt)
-    δ = Vector{SizedVector{3,Float64}}(undef,nt)
+    c = Vector{FixedVector{3,Chain{V,1,Float64,2}}}(undef,nt)
+    δ = Vector{FixedVector{3,Float64}}(undef,nt)
     for k ∈ 1:nt
         c[k] = V.(m[k].-p[value(t[k])])
         δ[k] = value.(abs.(c[k]))
@@ -305,7 +301,8 @@ function nedelec(λ,g,v::Val{3})
     m12 = (f[3,1]-f[3,3]-2f[2,1]+f[2,3])/12
     m13 = (f[3,2]-2f[3,1]-f[2,2]+f[2,1])/12
     m23 = (f[1,2]-f[1,1]-2f[3,2]+f[3,1])/12
-    @SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
+    #@SMatrix [m11 m12 m13; m12 m22 m23; m13 m23 m33]
+    Chain(Chain(m11,m12,m13),Chain(m12,m22,m23),Chain(m13,m23,m33))
 end
 
 function basisnedelec(p)
@@ -319,7 +316,7 @@ end
 function nedelecmean(t,t2e,signs,u)
     base = Grassmann.vectors(t)
     B = revrot.(base,revrot)./column(.∧(value.(base)))
-    N = basisnedelec(SVector(1,1)/3)
+    N = basisnedelec(Values(1,1)/3)
     x,y,z = columns(t2e); X,Y,Z = columns(signs,1,3)
     (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
 end

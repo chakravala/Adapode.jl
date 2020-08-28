@@ -2,11 +2,11 @@ using Grassmann
 using Adapode, Test
 
 basis"4"; x0 = 10.0v2+10.0v3+10.0v4
-Lorenz(x::Chain{V}) where V = Chain{V,1}(SVector{4,Float64}(
+Lorenz(x::Chain{V}) where V = Chain{V,1}(
 	1.0,
 	10.0(x[3]-x[2]),
 	x[2]*(28.0-x[4])-x[3],
-	x[2]*x[3]-(8/3)*x[4]))
+	x[2]*x[3]-(8/3)*x[4])
 for k ∈ 0:4
     @test (odesolve(Lorenz,x0,0,2π,7,Val(k),Val(4)); true)
 end
