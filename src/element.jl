@@ -23,7 +23,7 @@ using Base.Threads
 revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
 
 function gradienthat(t,m=volumes(t))
-    N = ndims(Manifold(t))
+    N = mdims(Manifold(t))
     if N == 2 #inv.(m)
         V = Manifold(points(t))
         c = Chain{↓(V),1}.(inv.(m))
@@ -70,7 +70,7 @@ assembleglobal(M,t,m=volumes(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),iter
 function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
     np = length(points(t)); A = spzeros(np,np)
     for k ∈ 1:length(t)
-        assemblelocal!(A,M(c[k],g[k],Val(ndims(Manifold(t)))),m[k],value(t[k]))
+        assemblelocal!(A,M(c[k],g[k],Val(mdims(Manifold(t)))),m[k],value(t[k]))
     end
     return A
 end
@@ -99,7 +99,7 @@ end
 function incidence(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
     A = spzeros(Int,np,nt)
-    for i ∈ Grassmann.list(1,ndims(Manifold(t)))
+    for i ∈ Grassmann.list(1,mdims(Manifold(t)))
         A += sparse(cols[i],1:nt,1,np,nt)
     end
     return A
@@ -107,7 +107,7 @@ end # node-element incidence, A[i,j]=1 -> i∈t[j]
 
 assemblemassfunction(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,l),iterpts(t,d))
 function assemblemassfunction(t,f::F,m::V,l::T,d::D) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector,D<:AbstractVector}
-    np,n = length(points(t)),Val(ndims(Manifold(t)))
+    np,n = length(points(t)),Val(mdims(Manifold(t)))
     M,b,v = spzeros(np,np), zeros(np), f./d
     for k ∈ 1:length(t)
         tk = value(t[k])
@@ -158,7 +158,7 @@ function assembledivergence(t,m,g)
     D1,D2 = spzeros(nt,np), spzeros(nt,np)
     for k ∈ 1:length(t)
         tk,gm = value(t[k]),g[k]*m[k]
-        for i ∈ 1:ndims(Manifold(t))
+        for i ∈ 1:mdims(Manifold(t))
             D1[k,tk[i]] = gm[i][1]
             D2[k,tk[i]] = gm[i][2]
         end
@@ -246,7 +246,7 @@ const solveboundary = solvedirichlet # deprecate
 const edgelengths = volumes # deprecate
 const boundary = pointset # deprecate
 
-facesindices(t,cols=columns(t)) = ndims(t) == 3 ? edgesindices(t,cols) : throw(error())
+facesindices(t,cols=columns(t)) = mdims(t) == 3 ? edgesindices(t,cols) : throw(error())
 
 function edgesindices(t,cols=columns(t))
     np,nt = length(points(t)),length(t)
@@ -262,7 +262,7 @@ function neighbor(k::Int,ab...)::Int
 end
 
 @generated function neighbors(A::SparseMatrixCSC,V,tk,k)
-    N,F = ndims(Manifold(V)),(x->x>0)
+    N,F = mdims(Manifold(V)),(x->x>0)
     N1 = Grassmann.list(1,N)
     x = Values{N}([Symbol(:x,i) for i ∈ N1])
     f = Values{N}([:(findall($F,A[:,tk[$i]])) for i ∈ N1])
@@ -274,7 +274,7 @@ end
 function neighbors(t,n2e=incidence(t))
     V,A = Manifold(Manifold(t)),sparse(n2e')
     nt = length(t)
-    n = Chain{V,1,Int,ndims(V)}[]; resize!(n,nt)
+    n = Chain{V,1,Int,mdims(V)}[]; resize!(n,nt)
     @threads for k ∈ 1:nt
         n[k] = neighbors(A,V,t[k],k)
     end
@@ -322,7 +322,7 @@ function nedelecmean(t,t2e,signs,u)
 end
 
 function jumps(t,c,a,f,u,m=volumes(t),g=gradienthat(t,m))
-    N,np,nt = ndims(Manifold(t)),length(points(t)),length(t)
+    N,np,nt = mdims(Manifold(t)),length(points(t)),length(t)
     η = zeros(nt)
     if N == 2
         fau = iterable(points(t),f).-a*u
