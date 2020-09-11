@@ -4,6 +4,7 @@
 
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
+export assemblemassincidence, asssemblemassnodes, assemblenodes
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
 export solvepoisson, solveSD, solvetransport, solvedirichlet, adaptpoisson
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
@@ -105,10 +106,10 @@ function incidence(t,cols=columns(t))
     return A
 end # node-element incidence, A[i,j]=1 -> i∈t[j]
 
-assemblemassfunction(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,iterpts(t,f),iterable(t,m),iterable(t,l),iterpts(t,d))
-function assemblemassfunction(t,f::F,m::V,l::T,d::D) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector,D<:AbstractVector}
+assemblemassincidence(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f),iterable(t,m),iterable(t,l))
+function assemblemassincidence(t,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector,D<:AbstractVector}
     np,n = length(points(t)),Val(mdims(Manifold(t)))
-    M,b,v = spzeros(np,np), zeros(np), f./d
+    M,b,v = spzeros(np,np), zeros(np), f
     for k ∈ 1:length(t)
         tk = value(t[k])
         assemblelocal!(M,mass(nothing,nothing,n),m[k],tk)
@@ -117,9 +118,12 @@ function assemblemassfunction(t,f::F,m::V,l::T,d::D) where {F<:AbstractVector,V<
     return M,b
 end
 
-assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,f./d,m)
-assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m,Val{true}())
-assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassfunction(t,1,m,l,d)
+assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(t,f)/mdims(t),m)
+assemblenodes(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(t,f)./d,m)
+assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m,Val(true))
+assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,inv.(d),m,l)
+assemblemassfunction(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f)/mdims(t),iterable(t,m),iterable(t,l))
+assemblemassnodes(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,iterpts(t,f)./d,iterable(t,m),iterable(t,l))
 
 interp(t) = assembleload(t,incidence(t))
 interp(t,b,d=degrees(t,b)) = assembleload(t,b,d)
@@ -167,7 +171,7 @@ function assembledivergence(t,m,g)
 end
 
 function assemble(t,c=1,a=1,f=0,m=volumes(t),g=gradienthat(t,m))
-    M,b = assemblemassfunction(t,f,isone(a) ? m : a.*m,m)
+    M,b = assemblemassnodes(t,f,isone(a) ? m : a.*m,m)
     return assemblestiffness(t,c,m,g),M,b
 end
 
@@ -181,7 +185,7 @@ end
 
 function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     m = volumes(t)
-    b = assemblefunction(t,f,m)
+    b = assemblenodes(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
     return (A+R)\(b+r)
