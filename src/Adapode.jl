@@ -1,7 +1,22 @@
 module Adapode
 
-#   This file is part of Aadapode.jl. It is licensed under the GPL license
+#   This file is part of Aadapode.jl
+#   It is licensed under the GPL license
 #   Adapode Copyright (C) 2019 Michael Reed
+#       _           _                         _
+#      | |         | |                       | |
+#   ___| |__   __ _| | ___ __ __ ___   ____ _| | __ _
+#  / __| '_ \ / _` | |/ / '__/ _` \ \ / / _` | |/ _` |
+# | (__| | | | (_| |   <| | | (_| |\ V / (_| | | (_| |
+#  \___|_| |_|\__,_|_|\_\_|  \__,_| \_/ \__,_|_|\__,_|
+#
+#   https://github.com/chakravala
+#   https://crucialflow.com
+#   _______     __                          __
+#  |   _   |.--|  |.---.-..-----..-----..--|  |.-----.
+#  |       ||  _  ||  _  ||  _  ||  _  ||  _  ||  -__|
+#  |___|___||_____||___._||   __||_____||_____||_____|
+#                         |__|
 
 using SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann
@@ -43,7 +58,7 @@ function weights(c,fx)
     return cfx
 end
 @pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = Values{m,Int}(k:m+k-1)
-@pure shift(M::Val{m},i) where {m,a} = ((shift(M,Val{0}()).+i).%(m+1)).+1
+@pure shift(M::Val{m},i) where m = ((shift(M,Val{0}()).+i).%(m+1)).+1
 explicit(x,h,c,fx) = (l=length(c);x+weights(h*c,l≠length(fx) ? fx[shift(Val(l))] : fx))
 explicit(x,h,c,fx,i) = (l=length(c);weights(h*c,l≠length(fx) ? fx[shift(Val(l),i)] : fx))
 improved_heun(x,f,h) = (fx = f(x); x+(h/2)*(fx+f(x+h*fx)))
@@ -175,16 +190,18 @@ function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
         t.s = 0
     end
     iszero(t.s) && checkstep!(t)
-    d = tmax-x[t.i][1]
+    d = tmax-time(x[t.i])
     d ≤ t.h && (t.h = d)
     done = d ≤ t.hmax
     done && truncate!(x,t.i-1)
     return !done
 end
 
+time(x) = x[1]
+
 Base.resize!(x,i,h) = length(x)<i+1 && resize!(x,i+h)
 truncate!(x,i) = length(x)>i+1 && resize!(x,i)
 
-show_progress(x,t,b) = t.i%75000 == 11 && println(x[t.i][1]," out of ",b)
+show_progress(x,t,b) = t.i%75000 == 11 && println(time(x[t.i])," out of ",b)
 
 end # module

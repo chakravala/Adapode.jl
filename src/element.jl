@@ -1,6 +1,16 @@
 
-#   This file is part of Adapode.jl. It is licensed under the AGPL license
+#   This file is part of Adapode.jl
+#   It is licensed under the AGPL license
 #   Adapode Copyright (C) 2019 Michael Reed
+#       _           _                         _
+#      | |         | |                       | |
+#   ___| |__   __ _| | ___ __ __ ___   ____ _| | __ _
+#  / __| '_ \ / _` | |/ / '__/ _` \ \ / / _` | |/ _` |
+# | (__| | | | (_| |   <| | | (_| |\ V / (_| | | (_| |
+#  \___|_| |_|\__,_|_|\_\_|  \__,_| \_/ \__,_|_|\__,_|
+#
+#   https://github.com/chakravala
+#   https://crucialflow.com
 
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
@@ -107,7 +117,7 @@ function incidence(t,cols=columns(t))
 end # node-element incidence, A[i,j]=1 -> i∈t[j]
 
 assemblemassincidence(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f),iterable(t,m),iterable(t,l))
-function assemblemassincidence(t,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector,D<:AbstractVector}
+function assemblemassincidence(t,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
     np,n = length(points(t)),Val(mdims(Manifold(t)))
     M,b,v = spzeros(np,np), zeros(np), f
     for k ∈ 1:length(t)
@@ -131,11 +141,11 @@ pretni(t,B::SparseMatrixCSC=incidence(t)) = assembleload(t,sparse(B'))
 pretni(t,ut,B=pretni(t)) = B*ut #interp(t,ut,B::SparseMatrixCSC) = B*ut
 
 #mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
-mass(a,b,::Val{N}) where N = (x=SubManifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
+mass(a,b,::Val{N}) where N = (x=Submanifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
 assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 
 stiffness(c,g::Float64,::Val{2}) = (cg = c*g^2; Chain(Chain(cg,-cg),Chain(-cg,cg)))
-stiffness(c,g,::Val{N}) where N = Chain{SubManifold(N),1}(map.(*,c,value(g).⋅Ref(g)))
+stiffness(c,g,::Val{N}) where N = Chain{Submanifold(N),1}(map.(*,c,value(g).⋅Ref(g)))
 assemblestiffness(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
 # iterable(means(t),c) # mapping of c.(means(t))
 
@@ -310,7 +320,7 @@ function nedelec(λ,g,v::Val{3})
 end
 
 function basisnedelec(p)
-    M = SubManifold(ℝ^3); V = ↓(M)
+    M = Submanifold(ℝ^3); V = ↓(M)
     Chain{M,1}(
         Chain{V,1}(-p[2],p[1]),
         Chain{V,1}(-p[2],p[1]-1),
