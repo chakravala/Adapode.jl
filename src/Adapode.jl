@@ -20,12 +20,233 @@ module Adapode
 
 using SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann
-import Grassmann: value, vector, valuetype
+import Grassmann: value, vector, valuetype, tangent
 import Base: @pure
 import AbstractTensors: Values, Variables, FixedVector
+import AbstractTensors: Scalar, GradedVector, Bivector, Trivector
 
 export Values, odesolve
 export initmesh, pdegrad
+
+export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, Surface, ParametricMap
+export TensorField, ScalarField, VectorField, BivectorField, TrivectorField
+export RealFunction, ComplexMap, ComplexMapping, SpinorField, CliffordField
+#export QuaternionField # PhasorField
+
+abstract type TensorCategory end
+Base.@pure iscategory(::TensorCategory) = true
+Base.@pure iscategory(::Any) = false
+
+struct TensorField{T,S,N} <: TensorCategory
+    dom::T
+    cod::Array{S,N}
+end
+
+#const ParametricMesh{T<:AbstractVector{<:Chain},S} = TensorField{T,S,1}
+const ElementFunction{T<:AbstractVector,S<:Real} = TensorField{T,S,1}
+const IntervalMap{T<:AbstractVector{<:Real},S} = TensorField{T,S,1}
+const RealFunction{T<:AbstractVector{<:Real},S<:Real} = ElementFunction{T,S}
+const PlaneCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,2} where {V,G,R}} = TensorField{T,S,1}
+const SpaceCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,3} where {V,G,R}} = TensorField{T,S,1}
+const Surface{T<:AbstractMatrix,S<:Real} = TensorField{T,S,2}
+const ParametricMap{T<:AbstractArray{<:Real},S,N} = TensorField{T,S,N}
+const ComplexMapping{T,S<:Complex,N} = TensorField{T,S,N}
+const ComplexMap{T,S<:Couple,N} = TensorField{T,S,N}
+const ScalarField{T,S<:Single,N} = TensorField{T,S,N}
+const VectorField{T,S<:Chain{V,1} where V,N} = TensorField{T,S,N}
+const SpinorField{T,S<:Spinor,N} = TensorField{T,S,N}
+#const PhasorField{T,S<:Phasor,N} = TensorField{T,S,N}
+#const QuaternionField{T,S<:Quaternion,N} = TensorField{T,S,N}
+const CliffordField{T,S<:Multivector,N} = TensorField{T,S,N}
+const BivectorField{T,S<:Chain{V,2} where V,N} = TensorField{T,S,N}
+const TrivectorField{T,S<:Chain{V,3} where V,N} = TensorField{T,S,N}
+
+parametric(dom::Vector{T},cod::Vector{S}) where {T,S} = TensorField{Vector{T},S,1}(dom,cod)
+parametric(dom,fun::Function) = TensorField(collect(dom),fun.(dom))
+
+function (m::IntervalMap{Vector{Float64}})(t)
+    i = searchsortedfirst(m.dom,t)-1
+    m.cod[i]+(t-m.dom[i])/(m.dom[i+1]-m.dom[i])*(m.cod[i+1]-m.cod[i])
+end
+function (m::IntervalMap{Vector{Float64}})(t::Vector,d=diff(m.cod)./diff(m.dom))
+    [parametric(i,m,d) for i ∈ t]
+end
+function parametric(t,m,d=diff(m.cod)./diff(m.dom))
+    i = searchsortedfirst(m.dom,t)-1
+    m.cod[i]+(t-m.dom[i])*d[i]
+end
+
+centraldiff_fast(f::Vector,dt::Float64,l=length(f)) = [centraldiff_fast(i,f,l)/centraldiff_fast(i,dt,l) for i ∈ 1:l]
+centraldiff_fast(f::Vector,dt::Vector,l=length(f)) = [centraldiff_fast(i,f,l)/dt[i] for i ∈ 1:l]
+centraldiff_fast(f::Vector,l=length(f)) = [centraldiff_fast(i,f,l) for i ∈ 1:l]
+function centraldiff_fast(i::Int,f::Vector{<:Chain},l=length(f))
+    if isone(i) # 4f[2]-f[3]-3f[1]
+        18f[2]-9f[3]+2f[4]-11f[1]
+    elseif i==l # 3f[end]-4f[end-1]+f[end-2]
+        11f[end]-18f[end-1]+9f[end-2]-2f[end-3]
+    else
+        f[i+1]-f[i-1]
+    end
+end
+centraldiff_fast(dt::Float64,l::Int) = [centraldiff_fast(i,dt,l) for i ∈ 1:l]
+centraldiff_fast(i::Int,dt::Float64,l::Int) = i∈(1,l) ? 6dt : 2dt
+#centraldiff_fast(i::Int,dt::Float64,l::Int) = 2dt
+
+centraldiff(f::Vector,dt::Float64,l=length(f)) = [centraldiff(i,f,l)/centraldiff(i,dt,l) for i ∈ 1:l]
+centraldiff(f::Vector,dt::Vector,l=length(f)) = [centraldiff(i,f,l)/dt[i] for i ∈ 1:l]
+centraldiffdiff(f,dt,l) = centraldiff(centraldiff(f,dt,l),dt,l)
+centraldiffdiff(f::Vector,dt) = centraldiffdiff(f,dt,length(f))
+centraldiff(f::Vector,l=length(f)) = [centraldiff(i,f,l) for i ∈ 1:l]
+function centraldiff(i::Int,f::Vector,l::Int=length(f))
+    if isone(i)
+        18f[2]-9f[3]+2f[4]-11f[1]
+    elseif i==l
+        11f[end]-18f[end-1]+9f[end-2]-2f[end-3]
+    elseif i==2
+        6f[3]-f[4]-3f[2]-2f[1]
+    elseif i==l-1
+        3f[end-1]-6f[end-2]+f[end-3]+2f[end]
+    else
+        f[i-2]+8f[i+1]-8f[i-1]-f[i+2]
+    end
+end
+centraldiff(dt::Float64,l::Int) = [centraldiff(i,dt,l) for i ∈ 1:l]
+function centraldiff(i::Int,dt::Float64,l::Int)
+    if i∈(1,2,l-1,l)
+        6dt
+    else
+        12dt
+    end
+end
+
+function centraldiff_fast(i::Int,h::Int,f::Vector{<:Chain},l=length(f))
+    if isone(i) # 4f[2]-f[3]-3f[1]
+        18f[2]-9f[3]+2f[4]-11f[1]
+    elseif i==l # 3f[end]-4f[end-1]+f[end-2]
+        11f[end]-18f[end-1]+9f[end-2]-2f[end-3]
+    else
+        (i-h<1)||(i+h)>l ? centraldiff_(i,h-1,f,l) : f[i+h]-f[i-h]
+    end
+end
+
+qnumber(n,q) = (q^n-1)/(q-1)
+qfactorial(n,q) = prod(cumsum([q^k for k ∈ 0:n-1]))
+qbinomial(n,k,q) = qfactorial(n,q)/(qfactorial(n-k,q)*qfactorial(k,q))
+
+richardson(k) = [(-1)^(j+k)*2^(j*(1+j))*qbinomial(k,j,4)/prod([4^n-1 for n ∈ 1:k]) for j ∈ k:-1:0]
+
+export arclength, trapz, linetrapz
+export centraldiff, tangent, unittangent, speed, normal, unitnormal
+
+arclength(f::Vector) = sum(abs.(diff(f)))
+function arclength(f::IntervalMap)
+    int = cumsum(abs.(diff(f.cod)))
+    pushfirst!(int,zero(eltype(int)))
+    TensorField(f.dom,int)
+end # trapz(speed(f))
+function trapz(f::IntervalMap,d=diff(f.dom))
+    int = (d/2).*cumsum(f.cod[2:end]+f.cod[1:end-1])
+    pushfirst!(int,zero(eltype(int)))
+    return TensorField(f.dom,int)
+end
+function trapz(f::Vector,h::Float64)
+    int = (h/2)*cumsum(f[2:end]+f[1:end-1])
+    pushfirst!(int,zero(eltype(int)))
+    return int
+end
+function linetrapz(γ::IntervalMap,f::Function)
+    trapz(TensorField(γ.dom,f.(γ.cod).⋅tangent(γ).cod))
+end
+function tangent(f::IntervalMap,dt=centraldiff(f.dom))
+    TensorField(f.dom,centraldiff(f.cod,dt))
+end
+function unittangent(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
+    TensorField(f.dom,t./abs.(t))
+end
+function speed(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
+    TensorField(f.dom,abs.(t))
+end
+function normal(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
+    TensorField(f.dom,centraldiff(t,d))
+end
+function unitnormal(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    TensorField(f.dom,n./abs.(n))
+end
+
+export curvature, radius, osculatingplane, unitosculatingplane, binormal, unitbinormal, curvaturebivector, torsion, curvaturetrivector, trihedron, frenet, wronskian, bishoppolar, bishop, curvaturetorsion
+
+function curvature(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),a=abs.(t))
+    TensorField(f.dom,abs.(centraldiff(t./a,d))./a)
+end
+function radius(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),a=abs.(t))
+    TensorField(f.dom,a./abs.(centraldiff(t./a,d)))
+end
+function osculatingplane(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    TensorField(f.dom,t.∧n)
+end
+function unitosculatingplane(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    TensorField(f.dom,(t./abs.(t)).∧(n./abs.(n)))
+end
+function binormal(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    TensorField(f.dom,.⋆(t.∧n))
+end
+function unitbinormal(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    TensorField(f.dom,.⋆((t./abs.(t)).∧(n./abs.(n))))
+end
+function curvaturebivector(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    a=abs.(t); ut=t./a
+    TensorField(f.dom,abs.(centraldiff(ut,d))./a.*(ut.∧(n./abs.(n))))
+end
+function torsion(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d),b=t.∧n)
+    TensorField(f.dom,(b.∧centraldiff(n,d))./abs.(.⋆b).^2)
+end
+function curvaturetrivector(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d),b=t.∧n)
+    a=abs.(t); ut=t./a
+    TensorField(f.dom,((abs.(centraldiff(ut,d)./a).^2).*(b.∧centraldiff(n,d))./abs.(.⋆b).^2))
+end
+#torsion(f::TensorField,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d),a=abs.(t)) = TensorField(f.dom,abs.(centraldiff(.⋆((t./a).∧(n./abs.(n))),d))./a)
+function trihedron(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    (ut,un)=(t./abs.(t),n./abs.(n))
+    Chain.(ut,un,.⋆(ut.∧un))
+end
+function frenet(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    (ut,un)=(t./abs.(t),n./abs.(n))
+    centraldiff(Chain.(ut,un,.⋆(ut.∧un)),d)
+end
+function wronskian(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
+    f.cod.∧t.∧n
+end
+
+#???
+function compare(f::TensorField)#???
+    d = centraldiff(f.dom)
+    t = centraldiff(f.cod,d)
+    n = centraldiff(t,d)
+    centraldiff(t./abs.(t)).-n./abs.(t)
+end #????
+
+function curvaturetorsion(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d),b=t.∧n)
+    a = abs.(t)
+    TensorField(f.dom,Chain.(value.(abs.(centraldiff(t./a,d))./a),getindex.((b.∧centraldiff(n,d))./abs.(.⋆b).^2,1)))
+end
+
+function bishoppolar(f::SpaceCurve,κ=value.(curvature(f).cod))
+    κ = value.()
+    d = diff(f.dom)
+    τs = getindex.((torsion(f).cod).*(speed(f).cod),1)
+    θ = (d/2).*cumsum(τs[2:end]+τs[1:end-1])
+    pushfirst!(θ,zero(eltype(θ)))
+    TensorField(f.dom,Chain.(κ,θ))
+end
+function bishop(f::SpaceCurve,κ=value.(curvature(f).cod))
+    d = diff(f.dom)
+    τs = getindex.((torsion(f).cod).*(speed(f).cod),1)
+    θ = (d/2).*cumsum(τs[2:end]+τs[1:end-1])
+    pushfirst!(θ,zero(eltype(θ)))
+    TensorField(f.dom,Chain.(κ.*cos.(θ),κ.*sin.(θ)))
+end
+#bishoppolar(f::TensorField) = TensorField(f.dom,Chain.(value.(curvature(f).cod),getindex.(trapz(torsion(f)).cod,1)))
+#bishop(f::TensorField,κ=value.(curvature(f).cod),θ=getindex.(trapz(torsion(f)).cod,1)) = TensorField(f.dom,Chain.(κ.*cos.(θ),κ.*sin.(θ)))
 
 include("constants.jl")
 include("element.jl")
