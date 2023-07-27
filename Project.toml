@@ -4,6 +4,7 @@ authors = ["Michael Reed"]
 version = "0.2.8"
 
 [deps]
+Requires = "ae029012-a4dd-5104-9daa-d747884805df"
 DirectSum = "22fd7b30-a8c0-5bf2-aabe-97783860d07c"
 Grassmann = "4df31cd9-4c27-5bea-88d0-e6a7146666d8"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
@@ -12,6 +13,7 @@ AbstractTensors = "a8e43f4a-99b7-5565-8bf1-0165161caaea"
 
 [compat]
 julia = "1"
+Requires = "1"
 AbstractTensors = "0.7"
 DirectSum = "0.8"
 Grassmann = "0.8"

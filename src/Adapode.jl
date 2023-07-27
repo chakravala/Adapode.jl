@@ -19,7 +19,7 @@ module Adapode
 #                         |__|
 
 using SparseArrays, LinearAlgebra
-using AbstractTensors, DirectSum, Grassmann
+using AbstractTensors, DirectSum, Grassmann, Requires
 import Grassmann: value, vector, valuetype, tangent
 import Base: @pure
 import AbstractTensors: Values, Variables, FixedVector
@@ -45,7 +45,7 @@ end
 #const ParametricMesh{T<:AbstractVector{<:Chain},S} = TensorField{T,S,1}
 const ElementFunction{T<:AbstractVector,S<:Real} = TensorField{T,S,1}
 const IntervalMap{T<:AbstractVector{<:Real},S} = TensorField{T,S,1}
-const RealFunction{T<:AbstractVector{<:Real},S<:Real} = ElementFunction{T,S}
+const RealFunction{T<:AbstractVector{<:Real},S<:Union{Real,Single,Chain{V,G,<:Real,1} where {V,G}}} = ElementFunction{T,S}
 const PlaneCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,2} where {V,G,R}} = TensorField{T,S,1}
 const SpaceCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,3} where {V,G,R}} = TensorField{T,S,1}
 const Surface{T<:AbstractMatrix,S<:Real} = TensorField{T,S,2}
@@ -61,8 +61,10 @@ const CliffordField{T,S<:Multivector,N} = TensorField{T,S,N}
 const BivectorField{T,S<:Chain{V,2} where V,N} = TensorField{T,S,N}
 const TrivectorField{T,S<:Chain{V,3} where V,N} = TensorField{T,S,N}
 
-parametric(dom::Vector{T},cod::Vector{S}) where {T,S} = TensorField{Vector{T},S,1}(dom,cod)
-parametric(dom,fun::Function) = TensorField(collect(dom),fun.(dom))
+export parametric
+parametric(dom::T,cod::Vector{S}) where {T,S} = TensorField{T,S,1}(dom,cod)
+parametric(dom::T,cod::Array{S,N}) where {T,S,N} = TensorField{T,S,N}(dom,cod)
+parametric(dom::AbstractArray,fun::Function) = parametric(dom,fun.(dom))
 
 function (m::IntervalMap{Vector{Float64}})(t)
     i = searchsortedfirst(m.dom,t)-1
@@ -88,6 +90,7 @@ function centraldiff_fast(i::Int,f::Vector{<:Chain},l=length(f))
         f[i+1]-f[i-1]
     end
 end
+centraldiff_fast(f::StepRangeLen,l=length(f)) = [centraldiff_fast(i,Float64(f.step),l) for i ∈ 1:l]
 centraldiff_fast(dt::Float64,l::Int) = [centraldiff_fast(i,dt,l) for i ∈ 1:l]
 centraldiff_fast(i::Int,dt::Float64,l::Int) = i∈(1,l) ? 6dt : 2dt
 #centraldiff_fast(i::Int,dt::Float64,l::Int) = 2dt
@@ -110,6 +113,8 @@ function centraldiff(i::Int,f::Vector,l::Int=length(f))
         f[i-2]+8f[i+1]-8f[i-1]-f[i+2]
     end
 end
+
+centraldiff(f::StepRangeLen,l=length(f)) = [centraldiff(i,Float64(f.step),l) for i ∈ 1:l]
 centraldiff(dt::Float64,l::Int) = [centraldiff(i,dt,l) for i ∈ 1:l]
 function centraldiff(i::Int,dt::Float64,l::Int)
     if i∈(1,2,l-1,l)
@@ -157,8 +162,8 @@ end
 function linetrapz(γ::IntervalMap,f::Function)
     trapz(TensorField(γ.dom,f.(γ.cod).⋅tangent(γ).cod))
 end
-function tangent(f::IntervalMap,dt=centraldiff(f.dom))
-    TensorField(f.dom,centraldiff(f.cod,dt))
+function tangent(f::IntervalMap,d=centraldiff(f.dom))
+    TensorField(f.dom,centraldiff(f.cod,d))
 end
 function unittangent(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
     TensorField(f.dom,t./abs.(t))
@@ -190,8 +195,10 @@ end
 function binormal(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
     TensorField(f.dom,.⋆(t.∧n))
 end
-function unitbinormal(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
-    TensorField(f.dom,.⋆((t./abs.(t)).∧(n./abs.(n))))
+function unitbinormal(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
+    a = t./abs.(t)
+    n = centraldiff(t./abs.(t),d)
+    TensorField(f.dom,.⋆(a.∧(n./abs.(n))))
 end
 function curvaturebivector(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
     a=abs.(t); ut=t./a
@@ -231,7 +238,6 @@ function curvaturetorsion(f::SpaceCurve,d=centraldiff(f.dom),t=centraldiff(f.cod
 end
 
 function bishoppolar(f::SpaceCurve,κ=value.(curvature(f).cod))
-    κ = value.()
     d = diff(f.dom)
     τs = getindex.((torsion(f).cod).*(speed(f).cod),1)
     θ = (d/2).*cumsum(τs[2:end]+τs[1:end-1])
@@ -247,6 +253,32 @@ function bishop(f::SpaceCurve,κ=value.(curvature(f).cod))
 end
 #bishoppolar(f::TensorField) = TensorField(f.dom,Chain.(value.(curvature(f).cod),getindex.(trapz(torsion(f)).cod,1)))
 #bishop(f::TensorField,κ=value.(curvature(f).cod),θ=getindex.(trapz(torsion(f)).cod,1)) = TensorField(f.dom,Chain.(κ.*cos.(θ),κ.*sin.(θ)))
+
+export ProductSpace, RealProductSpace, ⧺
+import DirectSum: ⊕
+
+struct ProductSpace{V,T,N,M,S} <: AbstractArray{Chain{V,1,T,N},N}
+    v::Values{M,S} # how to deal with T???
+    ProductSpace{V,T,N}(v::Values{M,S}) where {V,T,N,M,S} = new{V,T,N,M,S}(v)
+    ProductSpace{V,T}(v::Values{M,S}) where {V,T,M,S} = new{V,T,mdims(V),M,S}(v)
+end
+
+const RealProductSpace{V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N,N,S}
+RealProductSpace{V}(v::Values{N,S}) where {V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N}(v)
+RealProductSpace(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpace{ℝ^N,T,N}(v)
+ProductSpace{V}(v::Values{N,S}) where {V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N}(v)
+ProductSpace(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpace{ℝ^N,T,N}(v)
+
+@generated Base.size(m::RealProductSpace{V}) where V = :(($([:(size(m.v[$i])...) for i ∈ 1:mdims(V)]...),))
+@generated Base.getindex(m::RealProductSpace{V,T,N},i::Vararg{Int}) where {V,T,N} = :(Chain{V,1,T}($([:(m.v[$j][i[$j]]) for j ∈ 1:N]...)))
+@pure Base.eltype(::Type{ProductSpace{V,T,N}}) where {V,T,N} = Chain{V,1,T,N}
+
+
+⊕(a::AbstractVector{A},b::AbstractVector{B}) where {A<:Real,B<:Real} = RealProductSpace(Values(a,b))
+
+@generated ⧺(a::Real...) = :(Chain($([:(a[$i]) for i ∈ 1:length(a)]...)))
+@generated ⧺(a::Complex...) = :(Chain($([:(a[$i]) for i ∈ 1:length(a)]...)))
+⧺(a::Chain{A,G},b::Chain{B,G}) where {A,B,G} = Chain{A∪B,G}(vcat(a.v,b.v))
 
 include("constants.jl")
 include("element.jl")
@@ -424,5 +456,20 @@ Base.resize!(x,i,h) = length(x)<i+1 && resize!(x,i+h)
 truncate!(x,i) = length(x)>i+1 && resize!(x,i)
 
 show_progress(x,t,b) = t.i%75000 == 11 && println(time(x[t.i])," out of ",b)
+
+function __init__()
+    @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" begin
+        Makie.lines(t::IntervalMap) = Makie.lines(t.cod,color=value.(speed(t).cod))
+        Makie.lines(t::RealFunction) = Makie.lines(t.dom,getindex.(value.(t.cod),1),color=value.(speed(t).cod))
+        Makie.linesegments(t::IntervalMap) = Makie.linesegments(t.cod,color=value.(speed(t).cod))
+        Makie.linesegments(t::RealFunction) = Makie.linesegments(t.dom,getindex.(value.(t.cod),1),color=value.(speed(t).cod))
+        Makie.surface(t::Surface{<:RealProductSpace}) = Makie.surface(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.contour(t::Surface{<:RealProductSpace}) = Makie.contour(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.contourf(t::Surface{<:RealProductSpace}) = Makie.contourf(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.heatmap(t::Surface{<:RealProductSpace}) = Makie.heatmap(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.wireframe(t::Surface{<:RealProductSpace}) = Makie.wireframe(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.spy(t::Surface{<:RealProductSpace}) = Makie.spy(t.dom.v[1],t.dom.v[2],t.cod)
+    end
+end
 
 end # module
