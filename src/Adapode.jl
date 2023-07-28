@@ -33,50 +33,76 @@ export TensorField, ScalarField, VectorField, BivectorField, TrivectorField
 export RealFunction, ComplexMap, ComplexMapping, SpinorField, CliffordField
 #export QuaternionField # PhasorField
 
-abstract type TensorCategory end
-Base.@pure iscategory(::TensorCategory) = true
-Base.@pure iscategory(::Any) = false
+export Section, FiberBundle
 
-struct TensorField{T,S,N} <: TensorCategory
-    dom::T
-    cod::Array{S,N}
+struct Section{R,T} <: Number
+    v::Pair{R,T}
+    Section(v::Pair{R,T}) where {R,T} = new{R,T}(v)
+    Section(r::R,t::T) where {R,T} = new{R,T}(r=>t)
+end
+
+Base.:+(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second+b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Base.:-(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second-b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Grassmann.:∧(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second∧b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Grassmann.:∨(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second∨b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Grassmann.contraction(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,Grassmann.contraction(a.v.second,b.v.second)) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Base.:*(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second*b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Base.:/(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.v.first,a.v.second/b.v.second) : error("Section $(a.v.first) ≠ $(b.v.first)")
+Base.:*(a::Number,b::Section) = Section(b.v.first,a*b.v.second)
+Base.:*(a::Section,b::Number) = Section(a.v.first,a.v.second*b)
+Base.:/(a::Section,b::Number) = Section(a.v.first,a.v.second/b)
+
+abstract type FiberBundle{T,N} <: AbstractArray{T,N} end
+Base.@pure isfiber(::FiberBundle) = true
+Base.@pure isfiber(::Any) = false
+
+struct TensorField{R,B,T,N} <: FiberBundle{Section{R,T},N}
+    dom::B
+    cod::Array{T,N}
+    TensorField{R}(dom::B,cod::Array{T,N}) where {R,B,T,N} = new{R,B,T,N}(dom,cod)
+    TensorField(dom::B,cod::Array{T,N}) where {N,R,B<:AbstractArray{R,N},T} = new{R,B,T,N}(dom,cod)
 end
 
 #const ParametricMesh{T<:AbstractVector{<:Chain},S} = TensorField{T,S,1}
-const ElementFunction{T<:AbstractVector,S<:Real} = TensorField{T,S,1}
-const IntervalMap{T<:AbstractVector{<:Real},S} = TensorField{T,S,1}
-const RealFunction{T<:AbstractVector{<:Real},S<:Union{Real,Single,Chain{V,G,<:Real,1} where {V,G}}} = ElementFunction{T,S}
-const PlaneCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,2} where {V,G,R}} = TensorField{T,S,1}
-const SpaceCurve{T<:AbstractVector{<:Real},S<:Chain{V,G,R,3} where {V,G,R}} = TensorField{T,S,1}
-const Surface{T<:AbstractMatrix,S<:Real} = TensorField{T,S,2}
-const ParametricMap{T<:AbstractArray{<:Real},S,N} = TensorField{T,S,N}
-const ComplexMapping{T,S<:Complex,N} = TensorField{T,S,N}
-const ComplexMap{T,S<:Couple,N} = TensorField{T,S,N}
-const ScalarField{T,S<:Single,N} = TensorField{T,S,N}
-const VectorField{T,S<:Chain{V,1} where V,N} = TensorField{T,S,N}
-const SpinorField{T,S<:Spinor,N} = TensorField{T,S,N}
-#const PhasorField{T,S<:Phasor,N} = TensorField{T,S,N}
-#const QuaternionField{T,S<:Quaternion,N} = TensorField{T,S,N}
-const CliffordField{T,S<:Multivector,N} = TensorField{T,S,N}
-const BivectorField{T,S<:Chain{V,2} where V,N} = TensorField{T,S,N}
-const TrivectorField{T,S<:Chain{V,3} where V,N} = TensorField{T,S,N}
+const ElementFunction{R,B<:AbstractVector{R},T<:Real} = TensorField{R,B,T,1}
+const IntervalMap{R<:Real,B<:AbstractVector{R},T} = TensorField{R,B,T,1}
+const RealFunction{R<:Real,B<:AbstractVector{R},T<:Union{Real,Single,Chain{V,G,<:Real,1} where {V,G}}} = ElementFunction{R,B,T}
+const PlaneCurve{R<:Real,B<:AbstractVector{R},T<:Chain{V,G,Q,2} where {V,G,Q}} = TensorField{R,B,T,1}
+const SpaceCurve{R<:Real,B<:AbstractVector{R},T<:Chain{V,G,Q,3} where {V,G,Q}} = TensorField{R,B,T,1}
+const Surface{R,B<:AbstractMatrix{R},T<:Real} = TensorField{R,B,T,2}
+const ParametricMap{R<:Real,B<:AbstractArray{R},T,N} = TensorField{R,B,T,N}
+const ComplexMapping{R,B,T<:Complex,N} = TensorField{R,B,T,N}
+const ComplexMap{R,B,T<:Couple,N} = TensorField{R,B,T,N}
+const ScalarField{R,B,T<:Single,N} = TensorField{R,B,T,N}
+const VectorField{R,B,T<:Chain{V,1} where V,N} = TensorField{R,B,T,N}
+const SpinorField{R,B,T<:Spinor,N} = TensorField{R,B,T,N}
+#const PhasorField{R,B,T<:Phasor,N} = TensorField{R,B,T,N}
+#const QuaternionField{R,B,T<:Quaternion,N} = TensorField{R,B,T,N}
+const CliffordField{R,B,T<:Multivector,N} = TensorField{R,B,T,N}
+const BivectorField{R,B,T<:Chain{V,2} where V,N} = TensorField{R,B,T,N}
+const TrivectorField{R,B,T<:Chain{V,3} where V,N} = TensorField{R,B,T,N}
 
-export parametric
-parametric(dom::T,cod::Vector{S}) where {T,S} = TensorField{T,S,1}(dom,cod)
-parametric(dom::T,cod::Array{S,N}) where {T,S,N} = TensorField{T,S,N}(dom,cod)
-parametric(dom::AbstractArray,fun::Function) = parametric(dom,fun.(dom))
+TensorField(dom::AbstractArray,fun::Function) = TensorField(dom,fun.(dom))
 
-function (m::IntervalMap{Vector{Float64}})(t)
-    i = searchsortedfirst(m.dom,t)-1
+Base.size(m::TensorField) = size(m.cod)
+Base.getindex(m::TensorField,i::Vararg{Int}) = Section(getindex(m.dom,i...),getindex(m.cod,i...))
+@pure Base.eltype(::Type{TensorField{R,B,T}}) where {R,B,T} = Section{R,T}
+
+function (m::IntervalMap{Float64,Vector{Float64}})(t)
+    i = searchsortedfirst(domain(m),t)-1
     m.cod[i]+(t-m.dom[i])/(m.dom[i+1]-m.dom[i])*(m.cod[i+1]-m.cod[i])
 end
-function (m::IntervalMap{Vector{Float64}})(t::Vector,d=diff(m.cod)./diff(m.dom))
+function (m::IntervalMap{Float64,Vector{Float64}})(t::Vector,d=diff(m.cod)./diff(m.dom))
     [parametric(i,m,d) for i ∈ t]
 end
-function parametric(t,m,d=diff(m.cod)./diff(m.dom))
-    i = searchsortedfirst(m.dom,t)-1
-    m.cod[i]+(t-m.dom[i])*d[i]
+function parametric(t,m,d=diff(codomain(m))./diff(domain(m)))
+    i = searchsortedfirst(domain(m),t)-1
+    codomain(m)[i]+(t-domain(m)[i])*d[i]
 end
+
+export domain, codomain
+domain(t::TensorField) = t.dom
+codomain(t::TensorField) = t.cod
 
 centraldiff_fast(f::Vector,dt::Float64,l=length(f)) = [centraldiff_fast(i,f,l)/centraldiff_fast(i,dt,l) for i ∈ 1:l]
 centraldiff_fast(f::Vector,dt::Vector,l=length(f)) = [centraldiff_fast(i,f,l)/dt[i] for i ∈ 1:l]
@@ -145,14 +171,14 @@ export centraldiff, tangent, unittangent, speed, normal, unitnormal
 
 arclength(f::Vector) = sum(abs.(diff(f)))
 function arclength(f::IntervalMap)
-    int = cumsum(abs.(diff(f.cod)))
+    int = cumsum(abs.(diff(codomain(f))))
     pushfirst!(int,zero(eltype(int)))
-    TensorField(f.dom,int)
+    TensorField(domain(f),int)
 end # trapz(speed(f))
-function trapz(f::IntervalMap,d=diff(f.dom))
+function trapz(f::IntervalMap,d=diff(domain(f)))
     int = (d/2).*cumsum(f.cod[2:end]+f.cod[1:end-1])
     pushfirst!(int,zero(eltype(int)))
-    return TensorField(f.dom,int)
+    return TensorField(domain(f),int)
 end
 function trapz(f::Vector,h::Float64)
     int = (h/2)*cumsum(f[2:end]+f[1:end-1])
@@ -160,22 +186,22 @@ function trapz(f::Vector,h::Float64)
     return int
 end
 function linetrapz(γ::IntervalMap,f::Function)
-    trapz(TensorField(γ.dom,f.(γ.cod).⋅tangent(γ).cod))
+    trapz(TensorField(γ.dom,f.(codomain(γ)).⋅codomain(tangent(γ))))
 end
-function tangent(f::IntervalMap,d=centraldiff(f.dom))
-    TensorField(f.dom,centraldiff(f.cod,d))
+function tangent(f::IntervalMap,d=centraldiff(domain(f)))
+    TensorField(domain(f),centraldiff(codomain(f),d))
 end
-function unittangent(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
-    TensorField(f.dom,t./abs.(t))
+function unittangent(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d))
+    TensorField(domain(f),t./abs.(t))
 end
-function speed(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
-    TensorField(f.dom,abs.(t))
+function speed(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d))
+    TensorField(domain(f),abs.(t))
 end
-function normal(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d))
-    TensorField(f.dom,centraldiff(t,d))
+function normal(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d))
+    TensorField(domain(f),centraldiff(t,d))
 end
-function unitnormal(f::IntervalMap,d=centraldiff(f.dom),t=centraldiff(f.cod,d),n=centraldiff(t,d))
-    TensorField(f.dom,n./abs.(n))
+function unitnormal(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d),n=centraldiff(t,d))
+    TensorField(domain(f),n./abs.(n))
 end
 
 export curvature, radius, osculatingplane, unitosculatingplane, binormal, unitbinormal, curvaturebivector, torsion, curvaturetrivector, trihedron, frenet, wronskian, bishoppolar, bishop, curvaturetorsion
@@ -272,7 +298,6 @@ ProductSpace(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpa
 @generated Base.size(m::RealProductSpace{V}) where V = :(($([:(size(m.v[$i])...) for i ∈ 1:mdims(V)]...),))
 @generated Base.getindex(m::RealProductSpace{V,T,N},i::Vararg{Int}) where {V,T,N} = :(Chain{V,1,T}($([:(m.v[$j][i[$j]]) for j ∈ 1:N]...)))
 @pure Base.eltype(::Type{ProductSpace{V,T,N}}) where {V,T,N} = Chain{V,1,T,N}
-
 
 ⊕(a::AbstractVector{A},b::AbstractVector{B}) where {A<:Real,B<:Real} = RealProductSpace(Values(a,b))
 
