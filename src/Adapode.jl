@@ -28,11 +28,10 @@ import AbstractTensors: Scalar, GradedVector, Bivector, Trivector
 export Values, odesolve
 export initmesh, pdegrad
 
-export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, Surface, ParametricMap
+export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, GridSurface, GridParametric
 export TensorField, ScalarField, VectorField, BivectorField, TrivectorField
 export RealFunction, ComplexMap, ComplexMapping, SpinorField, CliffordField
-#export QuaternionField # PhasorField
-
+export MeshFunction, QuaternionField # PhasorField
 export Section, FiberBundle
 
 struct Section{R,T} <: Number
@@ -51,6 +50,8 @@ Base.:/(a::Section{R},b::Section{R}) where R = a.v.first==b.v.first ? Section(a.
 Base.:*(a::Number,b::Section) = Section(b.v.first,a*b.v.second)
 Base.:*(a::Section,b::Number) = Section(a.v.first,a.v.second*b)
 Base.:/(a::Section,b::Number) = Section(a.v.first,a.v.second/b)
+Base.abs(a::Section) = Section(a.v.first,abs(a.v.second))
+Grassmann.value(a::Section) = Section(a.v.first,value(a.v.second))
 
 abstract type FiberBundle{T,N} <: AbstractArray{T,N} end
 Base.@pure isfiber(::FiberBundle) = true
@@ -61,31 +62,36 @@ struct TensorField{R,B,T,N} <: FiberBundle{Section{R,T},N}
     cod::Array{T,N}
     TensorField{R}(dom::B,cod::Array{T,N}) where {R,B,T,N} = new{R,B,T,N}(dom,cod)
     TensorField(dom::B,cod::Array{T,N}) where {N,R,B<:AbstractArray{R,N},T} = new{R,B,T,N}(dom,cod)
+    TensorField(dom::B,cod::Vector{T}) where {B<:ChainBundle,T} = new{eltype(value(points(dom))),B,T,1}(dom,cod)
 end
 
+
 #const ParametricMesh{T<:AbstractVector{<:Chain},S} = TensorField{T,S,1}
+const MeshFunction{R,B<:ChainBundle,T<:Real} = TensorField{R,B,T,1}
 const ElementFunction{R,B<:AbstractVector{R},T<:Real} = TensorField{R,B,T,1}
 const IntervalMap{R<:Real,B<:AbstractVector{R},T} = TensorField{R,B,T,1}
 const RealFunction{R<:Real,B<:AbstractVector{R},T<:Union{Real,Single,Chain{V,G,<:Real,1} where {V,G}}} = ElementFunction{R,B,T}
 const PlaneCurve{R<:Real,B<:AbstractVector{R},T<:Chain{V,G,Q,2} where {V,G,Q}} = TensorField{R,B,T,1}
 const SpaceCurve{R<:Real,B<:AbstractVector{R},T<:Chain{V,G,Q,3} where {V,G,Q}} = TensorField{R,B,T,1}
-const Surface{R,B<:AbstractMatrix{R},T<:Real} = TensorField{R,B,T,2}
-const ParametricMap{R<:Real,B<:AbstractArray{R},T,N} = TensorField{R,B,T,N}
+const GridSurface{R,B<:AbstractMatrix{R},T<:Real} = TensorField{R,B,T,2}
+const GridParametric{R,B<:AbstractArray{R},T<:Real,N} = TensorField{R,B,T,N}
 const ComplexMapping{R,B,T<:Complex,N} = TensorField{R,B,T,N}
 const ComplexMap{R,B,T<:Couple,N} = TensorField{R,B,T,N}
 const ScalarField{R,B,T<:Single,N} = TensorField{R,B,T,N}
 const VectorField{R,B,T<:Chain{V,1} where V,N} = TensorField{R,B,T,N}
 const SpinorField{R,B,T<:Spinor,N} = TensorField{R,B,T,N}
 #const PhasorField{R,B,T<:Phasor,N} = TensorField{R,B,T,N}
-#const QuaternionField{R,B,T<:Quaternion,N} = TensorField{R,B,T,N}
+const QuaternionField{R,B,T<:Quaternion,N} = TensorField{R,B,T,N}
 const CliffordField{R,B,T<:Multivector,N} = TensorField{R,B,T,N}
 const BivectorField{R,B,T<:Chain{V,2} where V,N} = TensorField{R,B,T,N}
 const TrivectorField{R,B,T<:Chain{V,3} where V,N} = TensorField{R,B,T,N}
 
 TensorField(dom::AbstractArray,fun::Function) = TensorField(dom,fun.(dom))
+TensorField(dom::ChainBundle,fun::Function) = TensorField(dom,fun.(value(points(dom))))
 
 Base.size(m::TensorField) = size(m.cod)
-Base.getindex(m::TensorField,i::Vararg{Int}) = Section(getindex(m.dom,i...),getindex(m.cod,i...))
+Base.getindex(m::TensorField,i::Vararg{Int}) = Section(getindex(domain(m),i...),getindex(codomain(m),i...))
+Base.getindex(m::ElementFunction{R,<:ChainBundle} where R,i::Vararg{Int}) = Section(getindex(value(points(domain(m))),i...),getindex(codomain(m),i...))
 @pure Base.eltype(::Type{TensorField{R,B,T}}) where {R,B,T} = Section{R,T}
 
 function (m::IntervalMap{Float64,Vector{Float64}})(t)
@@ -100,9 +106,35 @@ function parametric(t,m,d=diff(codomain(m))./diff(domain(m)))
     codomain(m)[i]+(t-domain(m)[i])*d[i]
 end
 
+function (m::TensorField{R,<:ChainBundle} where R)(t)
+    i = domain(m)[findfirst(t,domain(m))]
+    (codomain(m)[i])⋅(points(domain(m))[i]/t)
+end
+
 export domain, codomain
 domain(t::TensorField) = t.dom
 codomain(t::TensorField) = t.cod
+
+Base.:*(n::Number,t::TensorField) = TensorField(domain(t),n*codomain(t))
+Base.:*(t::TensorField,n::Number) = TensorField(domain(t),codomain(t)*n)
+Base.:/(n::Number,t::TensorField) = TensorField(domain(t),n./codomain(t))
+Base.:/(t::TensorField,n::Number) = TensorField(domain(t),codomain(t)/n)
+Base.:+(n::Number,t::TensorField) = TensorField(domain(t),n.+codomain(t))
+Base.:+(t::TensorField,n::Number) = TensorField(domain(t),codomain(t).+n)
+Base.:-(n::Number,t::TensorField) = TensorField(domain(t),n.-codomain(t))
+Base.:-(t::TensorField,n::Number) = TensorField(domain(t),codomain(t).-n)
+Base.:*(a::TensorField,b::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).*codomain(b))
+Base.:/(a::TensorField,t::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a)./codomain(b))
+Base.:+(a::TensorField,b::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).+codomain(b))
+Base.:-(a::TensorField,b::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).-codomain(b))
+Grassmann.:∧(a::TensorField,b::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).∧codomain(b))
+Grassmann.:∨(a::TensorField,t::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).∨codomain(b))
+Grassmann.:⋅(a::TensorField,b::TensorField) = checkdomain(a,b) && TensorField(domain(t),codomain(a).⋅codomain(b))
+Base.abs(t::TensorField) = TensorField(domain(t),abs.(codomain(t)))
+Grassmann.value(t::TensorField) = TensorField(domain(t),value.(codomain(t)))
+absvalue(t::TensorField) = TensorField(domain(t),value.(abs.(codomain(t))))
+
+checkdomain(a::TensorField,b::TensorField) = domain(a)≠domain(b) ? error("TensorField domains not equal") : true
 
 centraldiff_fast(f::Vector,dt::Float64,l=length(f)) = [centraldiff_fast(i,f,l)/centraldiff_fast(i,dt,l) for i ∈ 1:l]
 centraldiff_fast(f::Vector,dt::Vector,l=length(f)) = [centraldiff_fast(i,f,l)/dt[i] for i ∈ 1:l]
@@ -121,10 +153,8 @@ centraldiff_fast(dt::Float64,l::Int) = [centraldiff_fast(i,dt,l) for i ∈ 1:l]
 centraldiff_fast(i::Int,dt::Float64,l::Int) = i∈(1,l) ? 6dt : 2dt
 #centraldiff_fast(i::Int,dt::Float64,l::Int) = 2dt
 
-centraldiff(f::Vector,dt::Float64,l=length(f)) = [centraldiff(i,f,l)/centraldiff(i,dt,l) for i ∈ 1:l]
+#=centraldiff(f::Vector,dt::Float64,l=length(f)) = [centraldiff(i,f,l)/centraldiff(i,dt,l) for i ∈ 1:l]
 centraldiff(f::Vector,dt::Vector,l=length(f)) = [centraldiff(i,f,l)/dt[i] for i ∈ 1:l]
-centraldiffdiff(f,dt,l) = centraldiff(centraldiff(f,dt,l),dt,l)
-centraldiffdiff(f::Vector,dt) = centraldiffdiff(f,dt,length(f))
 centraldiff(f::Vector,l=length(f)) = [centraldiff(i,f,l) for i ∈ 1:l]
 function centraldiff(i::Int,f::Vector,l::Int=length(f))
     if isone(i)
@@ -137,6 +167,50 @@ function centraldiff(i::Int,f::Vector,l::Int=length(f))
         3f[end-1]-6f[end-2]+f[end-3]+2f[end]
     else
         f[i-2]+8f[i+1]-8f[i-1]-f[i+2]
+    end
+end=#
+
+export Grid
+
+struct Grid{N,T,A<:AbstractArray{T,N}}
+    v::A
+end
+
+Base.size(m::Grid) = size(m.v)
+
+@generated function Base.getindex(g::Grid{M},j::Int,::Val{N},i::Vararg{Int}) where {M,N}
+    :(Base.getindex(g.v,$([k≠N ? :(i[$k]) : :(i[$k]+j) for k ∈ 1:M]...)))
+end
+
+centraldiffdiff(f,dt,l) = centraldiff(centraldiff(f,dt,l),dt,l)
+centraldiffdiff(f,dt) = centraldiffdiff(f,dt,size(f))
+centraldiff(f::AbstractArray,args...) = centraldiff(Grid(f),args...)
+
+centraldiff(f::Grid{1},dt::Float64,l=size(f.v)) = [centraldiff(f,l,i)/centraldiff(i,dt,l) for i ∈ 1:l]
+centraldiff(f::Grid{1},dt::Vector,l=size(f.v)) = [centraldiff(f,l,i)/dt[i] for i ∈ 1:l[1]]
+centraldiff(f::Grid{1},l=size(f.v)) = [centraldiff(f,l,i) for i ∈ 1:l[1]]
+
+centraldiff(f::Grid{2},dt::AbstractMatrix,l::Tuple=size(f.v)) = [Chain(centraldiff(f,l,i,j).v./(dt[i,j].v)) for i ∈ 1:l[1], j ∈ 1:l[2]]
+centraldiff(f::Grid{2},l::Tuple=size(f.v)) = [centraldiff(f,l,i,j) for i ∈ 1:l[1], j ∈ 1:l[2]]
+
+centraldiff(f::Grid{3},dt::AbstractArray{T,3} where T,l::Tuple=size(f.v)) = [Chain(centraldiff(f,l,i,j,k).v./(dt[i,j,k].v)) for i ∈ 1:l[1], j ∈ 1:l[2], k ∈ 1:l[3]]
+centraldiff(f::Grid{3},l::Tuple=size(f.v)) = [centraldiff(f,l,i,j,k) for i ∈ 1:l[1], j ∈ 1:l[2], k ∈ 1:l[3]]
+
+centraldiff(f::Grid{1},l,i::Int) = centraldiff(f,l[1],Val(1),i)
+@generated function centraldiff(f::Grid{M},l,i::Vararg{Int}) where M
+    :(Chain($([:(centraldiff(f,l[$k],Val($k),i...)) for k ∈ 1:M]...)))
+end
+function centraldiff(f::Grid,l,k::Val{N},i::Vararg{Int}) where N #l=size(f)[N]
+    if isone(i[N])
+        18f[1,k,i...]-9f[2,k,i...]+2f[3,k,i...]-11f.v[i...]
+    elseif i[N]==l
+        11f.v[i...]-18f[-1,k,i...]+9f[-2,k,i...]-2f[-3,k,i...]
+    elseif i[N]==2
+        6f[1,k,i...]-f[2,k,i...]-3f.v[i...]-2f[-1,k,i...]
+    elseif i[N]==l-1
+        3f.v[i...]-6f[-1,k,i...]+f[-2,k,i...]+2f[1,k,i...]
+    else
+        f[-2,k,i...]+8f[1,k,i...]-8f[-1,k,i...]-f[2,k,i...]
     end
 end
 
@@ -191,7 +265,17 @@ end
 function tangent(f::IntervalMap,d=centraldiff(domain(f)))
     TensorField(domain(f),centraldiff(codomain(f),d))
 end
+function tangent(f::GridParametric,d=centraldiff(domain(f)))
+    TensorField(domain(f),centraldiff(Grid(codomain(f)),d))
+end
+function tangent(f::MeshFunction)
+    TensorField(domain(f),interp(domain(f),gradient(domain(f),codomain(f))))
+end
 function unittangent(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d))
+    TensorField(domain(f),t./abs.(t))
+end
+function unittangent(f::MeshFunction)
+    t = interp(domain(f),gradient(domain(f),codomain(f)))
     TensorField(domain(f),t./abs.(t))
 end
 function speed(f::IntervalMap,d=centraldiff(domain(f)),t=centraldiff(codomain(f),d))
@@ -280,7 +364,7 @@ end
 #bishoppolar(f::TensorField) = TensorField(f.dom,Chain.(value.(curvature(f).cod),getindex.(trapz(torsion(f)).cod,1)))
 #bishop(f::TensorField,κ=value.(curvature(f).cod),θ=getindex.(trapz(torsion(f)).cod,1)) = TensorField(f.dom,Chain.(κ.*cos.(θ),κ.*sin.(θ)))
 
-export ProductSpace, RealProductSpace, ⧺
+export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺
 import DirectSum: ⊕
 
 struct ProductSpace{V,T,N,M,S} <: AbstractArray{Chain{V,1,T,N},N}
@@ -289,17 +373,42 @@ struct ProductSpace{V,T,N,M,S} <: AbstractArray{Chain{V,1,T,N},N}
     ProductSpace{V,T}(v::Values{M,S}) where {V,T,M,S} = new{V,T,mdims(V),M,S}(v)
 end
 
-const RealProductSpace{V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N,N,S}
-RealProductSpace{V}(v::Values{N,S}) where {V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N}(v)
-RealProductSpace(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpace{ℝ^N,T,N}(v)
+const RealRegion{V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N,N,S}
+const Interval{V,T,S} = RealRegion{V,T,1,S}
+const Rectangle{V,T,S} = RealRegion{V,T,2,S}
+const Hyperrectangle{V,T,S} = RealRegion{V,T,3,S}
+RealRegion{V}(v::Values{N,S}) where {V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N}(v)
+RealRegion(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpace{ℝ^N,T,N}(v)
 ProductSpace{V}(v::Values{N,S}) where {V,T<:Real,N,S<:AbstractVector{T}} = ProductSpace{V,T,N}(v)
 ProductSpace(v::Values{N,S}) where {T<:Real,N,S<:AbstractVector{T}} = ProductSpace{ℝ^N,T,N}(v)
 
-@generated Base.size(m::RealProductSpace{V}) where V = :(($([:(size(m.v[$i])...) for i ∈ 1:mdims(V)]...),))
-@generated Base.getindex(m::RealProductSpace{V,T,N},i::Vararg{Int}) where {V,T,N} = :(Chain{V,1,T}($([:(m.v[$j][i[$j]]) for j ∈ 1:N]...)))
+@generated Base.size(m::RealRegion{V}) where V = :(($([:(size(m.v[$i])...) for i ∈ 1:mdims(V)]...),))
+@generated Base.getindex(m::RealRegion{V,T,N},i::Vararg{Int}) where {V,T,N} = :(Chain{V,1,T}($([:(m.v[$j][i[$j]]) for j ∈ 1:N]...)))
 @pure Base.eltype(::Type{ProductSpace{V,T,N}}) where {V,T,N} = Chain{V,1,T,N}
 
-⊕(a::AbstractVector{A},b::AbstractVector{B}) where {A<:Real,B<:Real} = RealProductSpace(Values(a,b))
+centraldiff(f::RealRegion) = ProductSpace(centraldiff.(f.v))
+
+function (m::TensorField{R,<:Rectangle} where R)(t)
+    x,y = domain(m).v[1],domain(m).v[2]
+    i,j = searchsortedfirst(x,t[1])-1,searchsortedfirst(y,t[2])-1
+    f1 = m.cod[i,j]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j]-m.cod[i,j])
+    f2 = m.cod[i,j+1]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j+1]-m.cod[i,j+1])
+    f1+(t[2]-y[i])/(y[i+1]-y[i])*(f2-f1)
+end
+
+function (m::TensorField{R,<:Hyperrectangle} where R)(t)
+    x,y,z = domain(m).v[1],domain(m).v[2],domain(m).v[3]
+    i,j,k = searchsortedfirst(x,t[1])-1,searchsortedfirst(y,t[2])-1,searchsortedfirst(z,t[3])-1
+    f1 = m.cod[i,j,k]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j,k]-m.cod[i,j,k])
+    f2 = m.cod[i,j+1,k]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j+1,k]-m.cod[i,j+1,k])
+    g1 = f1+(t[2]-y[i])/(y[i+1]-y[i])*(f2-f1)
+    f3 = m.cod[i,j,k+1]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j,k+1]-m.cod[i,j,k+1])
+    f4 = m.cod[i,j+1,k+1]+(t[1]-x[i])/(x[i+1]-x[i])*(m.cod[i+1,j+1,k+1]-m.cod[i,j+1,k+1])
+    g2 = f3+(t[2]-y[i])/(y[i+1]-y[i])*(f4-f3)
+    g1+(t[3]-z[i])/(z[i+1]-z[i])*(g2-g1)
+end
+
+⊕(a::AbstractVector{A},b::AbstractVector{B}) where {A<:Real,B<:Real} = RealRegion(Values(a,b))
 
 @generated ⧺(a::Real...) = :(Chain($([:(a[$i]) for i ∈ 1:length(a)]...)))
 @generated ⧺(a::Complex...) = :(Chain($([:(a[$i]) for i ∈ 1:length(a)]...)))
@@ -484,16 +593,51 @@ show_progress(x,t,b) = t.i%75000 == 11 && println(time(x[t.i])," out of ",b)
 
 function __init__()
     @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" begin
-        Makie.lines(t::IntervalMap) = Makie.lines(t.cod,color=value.(speed(t).cod))
-        Makie.lines(t::RealFunction) = Makie.lines(t.dom,getindex.(value.(t.cod),1),color=value.(speed(t).cod))
-        Makie.linesegments(t::IntervalMap) = Makie.linesegments(t.cod,color=value.(speed(t).cod))
-        Makie.linesegments(t::RealFunction) = Makie.linesegments(t.dom,getindex.(value.(t.cod),1),color=value.(speed(t).cod))
-        Makie.surface(t::Surface{<:RealProductSpace}) = Makie.surface(t.dom.v[1],t.dom.v[2],t.cod)
-        Makie.contour(t::Surface{<:RealProductSpace}) = Makie.contour(t.dom.v[1],t.dom.v[2],t.cod)
-        Makie.contourf(t::Surface{<:RealProductSpace}) = Makie.contourf(t.dom.v[1],t.dom.v[2],t.cod)
-        Makie.heatmap(t::Surface{<:RealProductSpace}) = Makie.heatmap(t.dom.v[1],t.dom.v[2],t.cod)
-        Makie.wireframe(t::Surface{<:RealProductSpace}) = Makie.wireframe(t.dom.v[1],t.dom.v[2],t.cod)
-        Makie.spy(t::Surface{<:RealProductSpace}) = Makie.spy(t.dom.v[1],t.dom.v[2],t.cod)
+        Makie.lines(t::SpaceCurve;args...) = Makie.lines(t.cod;color=value.(speed(t).cod),args...)
+        Makie.lines(t::PlaneCurve;args...) = Makie.lines(t.cod;color=value.(speed(t).cod),args...)
+        Makie.lines(t::RealFunction;args...) = Makie.lines(t.dom,getindex.(value.(t.cod),1);color=value.(speed(t).cod),args...)
+        Makie.linesegments(t::SpaceCurve;args...) = Makie.linesegments(t.cod;color=value.(speed(t).cod),args...)
+        Makie.linesegments(t::PlaneCurve;args...) = Makie.linesegments(t.cod;color=value.(speed(t).cod),args...)
+        Makie.linesegments(t::RealFunction;args...) = Makie.linesegments(t.dom,getindex.(value.(t.cod),1);color=value.(speed(t).cod),args...)
+        Makie.volume(t::GridParametric{<:Chain,<:Hyperrectangle};args...) = Makie.volume(t.dom.v[1],t.dom.v[2],t.dom.v[3],t.cod;args...)
+        Makie.volumeslices(t::GridParametric{<:Chain,<:Hyperrectangle};args...) = Makie.volumeslices(t.dom.v[1],t.dom.v[2],t.dom.v[3],t.cod;args...)
+        Makie.surface(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.surface(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.contour(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contour(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.contourf(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contourf(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.contour3d(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contour3d(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.heatmap(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.heatmap(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.wireframe(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.wireframe(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        #Makie.spy(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.spy(t.dom.v[1],t.dom.v[2],t.cod;args...)
+        Makie.streamplot(f::Function,t::Rectangle;args...) = Makie.streamplot(f,t.v[1],t.v[2];args...)
+        Makie.streamplot(f::Function,t::Hyperrectangle;args...) = Makie.streamplot(f,t.v[1],t.v[2],t.v[3];args...)
+        Makie.streamplot(m::TensorField{R,<:RealRegion,<:Real} where R;args...) = Makie.streamplot(tangent(m);args...)
+        Makie.streamplot(m::TensorField{R,<:ChainBundle,<:Real} where R,dims...;args...) = Makie.streamplot(tangent(m),dims...;args...)
+        Makie.streamplot(m::VectorField{R,<:ChainBundle} where R,dims...;args...) = Makie.streamplot(p->Makie.Point(m(Chain(one(eltype(p)),p.data...))),dims...;args...)
+        Makie.streamplot(m::VectorField{R,<:RealRegion} where R;args...) = Makie.streamplot(p->Makie.Point(m(Chain(p.data...))),domain(m).v...;args...)
+        Makie.arrows(t::VectorField{<:Chain,<:Rectangle};args...) = Makie.arrows(t.dom.v[1],t.dom.v[2],getindex.(t.cod,1),getindex.(t.cod,2);args...)
+        Makie.arrows!(t::VectorField{<:Chain,<:Rectangle};args...) = Makie.arrows!(t.dom.v[1],t.dom.v[2],getindex.(t.cod,1),getindex.(t.cod,2);args...)
+        Makie.arrows(t::VectorField{<:Chain,<:Hyperrectangle};args...) = Makie.arrows(Makie.Point.(domain(t))[:],Makie.Point.(codomain(t))[:];args...)
+        Makie.arrows!(t::VectorField{<:Chain,<:Hyperrectangle};args...) = Makie.arrows!(Makie.Point.(domain(t))[:],Makie.Point.(codomain(t))[:];args...)
+        Makie.arrows(t::Rectangle,f::Function;args...) = Makie.arrows(t.v[1],t.v[2],f;args...)
+        Makie.arrows!(t::Rectangle,f::Function;args...) = Makie.arrows!(t.v[1],t.v[2],f;args...)
+        Makie.arrows(t::Hyperrectangle,f::Function;args...) = Makie.arrows(t.v[1],t.v[2],t.v[3],f;args...)
+        Makie.arrows!(t::Hyperrectangle,f::Function;args...) = Makie.arrows!(t.v[1],t.v[2],t.v[3],f;args...)
+        Makie.arrows(t::MeshFunction;args...) = Makie.arrows(points(domain(t)),codomain(t);args...)
+        Makie.arrows!(t::MeshFunction;args...) = Makie.arrows!(points(domain(t)),codomain(t);args...)
+        Makie.mesh(t::ElementFunction;args...) = Makie.mesh(domain(t);color=codomain(t),args...)
+        Makie.mesh!(t::ElementFunction;args...) = Makie.mesh!(domain(t);color=codomain(t),args...)
+        Makie.mesh(t::MeshFunction;args...) = Makie.mesh(domain(t);color=codomain(t),args...)
+        Makie.mesh!(t::MeshFunction;args...) = Makie.mesh!(domain(t);color=codomain(t),args...)
+        Makie.wireframe(t::ElementFunction;args...) = Makie.wireframe(value(domain(t));color=codomain(t),args...)
+        Makie.wireframe!(t::ElementFunction;args...) = Makie.wireframe!(value(domain(t));color=codomain(t),args...)
+    end
+    @requires UnicodePlots="b8865327-cd53-5732-bb35-84acbb429228" begin
+        UnicodePlots.lineplot(t::PlaneCurve;args...) = UnicodePlots.lineplot(getindex.(t.cod,1),getindex.(t.cod,2);args...)
+        UnicodePlots.lineplot(t::RealFunction;args...) = UnicodePlots.lineplot(t.dom,getindex.(value.(t.cod),1);args...)
+        UnicodePlots.contourplot(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.contourplot(t.dom.v[1][2:end-1],t.dom.v[2][2:end-1],(x,y)->t(Chain(x,y));args...)
+        UnicodePlots.surfaceplot(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.surfaceplot(t.dom.v[1][2:end-1],t.dom.v[2][2:end-1],(x,y)->t(Chain(x,y));args...)
+        UnicodePlots.spy(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.spy(t.cod;args...)
+        UnicodePlots.heatmap(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.heatmap(t.cod;args...)
     end
 end
 
