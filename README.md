@@ -11,21 +11,17 @@
 [![Docs Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://grassmann.crucialflow.com/dev)
 [![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
-[![Build status](https://ci.appveyor.com/api/projects/status/wpu43q92o06afi0a?svg=true)](https://ci.appveyor.com/project/chakravala/adapode-jl)
-[![Coverage Status](https://coveralls.io/repos/chakravala/Adapode.jl/badge.svg?branch=master&service=github)](https://coveralls.io/github/chakravala/Adapode.jl?branch=master)
-[![codecov.io](https://codecov.io/github/chakravala/Adapode.jl/coverage.svg?branch=master)](https://codecov.io/github/chakravala/Adapode.jl?branch=master)
 
 This Julia project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode).
 
 ```julia
 using Grassmann, Adapode, Makie
-basis"4"; x0 = 10.0v2+10.0v3+10.0v4
-Lorenz(x::Chain{V}) where V = Chain{V,1}(
-	1.0,
-	10.0(x[3]-x[2]),
-	x[2]*(28.0-x[4])-x[3],
-	x[2]*x[3]-(8/3)*x[4])
-lines(Point.((V(2,3,4)).(odesolve(Lorenz,x0))))
+x0 = Chain(10.0,10.0,10.0)
+Lorenz(x) = Chain(
+	10.0(x[2]-x[1]),
+	x[1]*(28.0-x[3])-x[2],
+	x[1]*x[2]-(8/3)*x[3])
+lines(odesolve(Lorenz,x0))
 ```
 Supported ODE solvers include:
 explicit Euler,

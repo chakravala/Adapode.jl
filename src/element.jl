@@ -23,30 +23,8 @@ export boundary, interior, trilength, trinormals, incidence, degrees
 import Grassmann: norm, column, columns, points, pointset, edges
 using Base.Threads
 
-@inline iterpts(t,f) = iterable(points(t),f)
-@inline iterable(p,f) = range(f,f,length=length(p))
-@inline iterable(p,f::F) where F<:Function = f.(value(p))
-@inline iterable(p,f::ChainBundle) = value(f)
-@inline iterable(p,f::F) where F<:AbstractVector = f
-@inline callable(c::F) where F<:Function = c
-@inline callable(c) = x->c
-
-revrot(hk::Chain{V,1},f=identity) where V = Chain{V,1}(-f(hk[2]),f(hk[1]))
-
-function gradienthat(t,m=volumes(t))
-    N = mdims(Manifold(t))
-    if N == 2 #inv.(m)
-        V = Manifold(points(t))
-        c = Chain{↓(V),1}.(inv.(m))
-        Chain{V,1}.(-c,c)
-    elseif N == 3
-        h = curls(t)./2m
-        V = Manifold(h); V2 = ↓(V)
-        [Chain{V,1}(revrot.(V2.(value(h[k])))) for k ∈ 1:length(h)]
-    else
-        Grassmann.grad.(points(t)[value(t)])
-    end
-end
+import TensorFields: iterpts, iterable, callable, revrot
+import TensorFields: gradienthat, laplacian, gradient, assemblelocal!
 
 trilength(rc) = value.(abs.(value(rc)))
 function trinormals(t)
@@ -66,17 +44,6 @@ function gradientCR(g::Chain{V}) where V
         Chain{V,1}(1,1,-1)))
 end
 
-laplacian(t,u,m=volumes(t),g=gradienthat(t,m)) = value.(abs.(gradient(t,u,m,g)))
-gradient(t,u,m=volumes(t),g=gradienthat(t,m)) = [u[value(t[k])]⋅value(g[k]) for k ∈ 1:length(t)]
-
-for T ∈ (:Values,:Variables)
-    @eval function assemblelocal!(M,mat,m,tk::$T{N}) where N
-        for i ∈ 1:N, j∈ 1:N
-            M[tk[i],tk[j]] += mat[i,j]*m
-        end
-    end
-end
-
 assembleglobal(M,t,m=volumes(t),c=1,g=0) = assembleglobal(M,t,iterable(t,m),iterable(t,c),iterable(t,g))
 function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
     np = length(points(t)); A = spzeros(np,np)
@@ -86,35 +53,7 @@ function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:Abstract
     return A
 end
 
-weights(t,d::Vector=degrees(t)) = inv.(d)
-weights(t,B::SparseMatrixCSC) = inv.(degrees(t,f))
-degrees(t,B::SparseMatrixCSC) = B*ones(Int,length(t)) # A = incidence(t)
-function degrees(t,f=nothing)
-    b = zeros(Int,length(points(t)))
-    for tk ∈ value(t)
-        b[value(tk)] .+= 1
-    end
-    return b
-end
-
-assembleincidence(t,f,B::SparseMatrixCSC) = Diagonal(iterpts(t,f))*B
-assembleincidence(t,f,m=volumes(t)) = assembleincidence(t,iterpts(t,f),iterable(t,m))
-function assembleincidence(t,f::F,m::V,::Val{T}=Val{false}()) where {F<:AbstractVector,V<:AbstractVector,T}
-    b = zeros(eltype(T ? m : f),length(points(t)))
-    for k ∈ 1:length(t)
-        tk = value(t[k])
-        b[tk] .+= f[tk].*m[k]
-    end
-    return b
-end
-function incidence(t,cols=columns(t))
-    np,nt = length(points(t)),length(t)
-    A = spzeros(Int,np,nt)
-    for i ∈ Grassmann.list(1,mdims(Manifold(t)))
-        A += sparse(cols[i],1:nt,1,np,nt)
-    end
-    return A
-end # node-element incidence, A[i,j]=1 -> i∈t[j]
+import TensorFields: weights, degrees, assembleincidence, incidence
 
 assemblemassincidence(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f),iterable(t,m),iterable(t,l))
 function assemblemassincidence(t,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
@@ -130,15 +69,11 @@ end
 
 assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(t,f)/mdims(t),m)
 assemblenodes(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(t,f)./d,m)
-assembleload(t,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,inv.(d),m,Val(true))
 assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,inv.(d),m,l)
 assemblemassfunction(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f)/mdims(t),iterable(t,m),iterable(t,l))
 assemblemassnodes(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,iterpts(t,f)./d,iterable(t,m),iterable(t,l))
 
-interp(t) = assembleload(t,incidence(t))
-interp(t,b,d=degrees(t,b)) = assembleload(t,b,d)
-pretni(t,B::SparseMatrixCSC=incidence(t)) = assembleload(t,sparse(B'))
-pretni(t,ut,B=pretni(t)) = B*ut #interp(t,ut,B::SparseMatrixCSC) = B*ut
+import TensorFields: assembleload, interp, pretni
 
 #mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 mass(a,b,::Val{N}) where N = (x=Submanifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
@@ -252,14 +187,17 @@ function solvedirichlet(M,b,fixed)
     return ξ
 end
 
-interior(e) = interior(length(points(e)),pointset(e))
-interior(fixed,neq) = sort!(setdiff(1:neq,fixed))
+import TensorFields: interior
+
 solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
 export solvehomogenous, solveboundary
 const solveboundary = solvedirichlet # deprecate
 const edgelengths = volumes # deprecate
 const boundary = pointset # deprecate
 
+import TensorFields: facesindices, edgesindices, neighbor, neighbors, centroidvectors
+
+#=
 facesindices(t,cols=columns(t)) = mdims(t) == 3 ? edgesindices(t,cols) : throw(error())
 
 function edgesindices(t,cols=columns(t))
@@ -306,6 +244,7 @@ function centroidvectors(t,m=means(t))
     end
     return c,δ
 end
+=#
 
 function nedelec(λ,g,v::Val{3})
     f = stiffness(λ,g,v)
