@@ -20,20 +20,21 @@ module Adapode
 
 using SparseArrays, LinearAlgebra
 using AbstractTensors, DirectSum, Grassmann, TensorFields, Requires
-import Grassmann: value, vector, valuetype, tangent
+import Grassmann: value, vector, valuetype, tangent, list
 import Base: @pure
 import AbstractTensors: Values, Variables, FixedVector
 import AbstractTensors: Scalar, GradedVector, Bivector, Trivector
 
-export Values, odesolve
+export Values, odesolve, odesolve2
 export initmesh, pdegrad
 
-export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, GridSurface, GridParametric
+export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, SurfaceGrid, ScalarGrid
 export TensorField, ScalarField, VectorField, BivectorField, TrivectorField
-export RealFunction, ComplexMap, ComplexMapping, SpinorField, CliffordField
+export RealFunction, ComplexMap, SpinorField, CliffordField
 export MeshFunction, GradedField, QuaternionField # PhasorField
 export Section, FiberBundle, AbstractFiber
 export base, fiber, domain, codomain, ↦, →, ←, ↤, basetype, fibertype
+export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺, ⊕
 
 include("constants.jl")
 include("element.jl")
@@ -65,11 +66,25 @@ function weights(c,fx)
     end
     return cfx
 end
-@pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = Values{m,Int}(k:m+k-1)
-@pure shift(M::Val{m},i) where m = ((shift(M,Val{0}()).+i).%(m+1)).+1
-explicit(x,h,c,fx) = (l=length(c);fiber(x)+weights(h*c,l≠length(fx) ? fx[shift(Val(l))] : fx))
-explicit(x,h,c,fx,i) = (l=length(c);weights(h*c,l≠length(fx) ? fx[shift(Val(l),i)] : fx))
-improved_heun(x,f,h) = (fx = f(x); fiber(x)+(h/2)*(fx+f((base(x)+h)↦(fiber(x)+h*fx))))
+@pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = Values{m,Int}(list(k,m+k-1))
+@pure shift(::Val{m},l::Val,i) where m = ((shift(l,Val(0)).+i).%m).+1
+function explicit(x,h,c,fx)
+    l = length(c)
+    fiber(x)+weights(h*c,l≠length(fx) ? fx[shift(Val(l))] : fx)
+end
+function explicit(x,h,c,fx,i)
+    l,m = length(c),length(fx)
+    weights(h*c,fx[shift(Val(m),Val(l),i+(m-l))])
+end
+function heun(x,f::Function,h)
+    hfx = h*f(x)
+    fiber(x)+(hfx+h*f((base(x)+h)↦(fiber(x)+hfx)))/2
+end
+function heun(x,f::TensorField,t)
+    fx = f[t.i]
+    hfx = t.h*fx
+    fiber(x)+(hfx+t.h*f(base(fx)↦(fiber(x)+hfx)))/2
+end
 
 @pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
 @pure blength(n::Val{N},a::Val{A}=Val(false)) where {N,A} = Val(length(butcher(n,a))-A)
@@ -83,40 +98,66 @@ function butcher(x::Section{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) wher
     end
     return fx
 end
-explicit(x,f,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
-explicit(x,f,h,::Val{1}) = fiber(x)+h*f(x)
+explicit(x,f::Function,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
+explicit(x,f::Function,h,::Val{1}) = fiber(x)+h*f(x)
 
-function multistep!(x,f,fx,t,K::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
-    @inbounds fx[((t.s+k-1)%(k+1))+1] = f(x)
-    @inbounds explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
-end
+function multistep!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
+    fx[t.s] = f(x)
+    explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
+end # more accurate compared with CAB[k] methods
 function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
     @inbounds xti = x[t.i]
     xi,tn = fiber(xti),base(xti)+t.h
-    p = xi + multistep!(xti,f,fx,t,k)
+    xn = multistep!(xti,f,fx,t,k)
     t.s = (t.s%(m+1))+1; t.i += 1
-    xi+multistep!(tn↦p,f,fx,t,k,Val(true))
+    xn = multistep!(tn↦(xi+xn),f,fx,t,k,Val(true))
+    return xi + xn
 end
 function predictcorrect(x,f,fx,t,::Val{1})
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti),base(xti)+t.h
     t.i += 1
-    xi+t.h*f(tn↦(xi+t.h*f(xti)))
+    fiber(xti)+t.h*f((base(xti)+t.h)↦(fiber(xti)+t.h*f(xti)))
 end
 
-initsteps(x0::Section,t,tmin,tmax,m) = initsteps(fiber(x0),t,tmin,tmax,m)
-initsteps(x0::Section,t,tmin,tmax,f,m,B) = initsteps(fiber(x0),t,tmin,tmax,f,m,B)
-function initsteps(x0,t,tmin,tmax,::Val{m}) where m
+initsteps(x0,t,tmax,m) = initsteps(init(x0),t,tmax,m)
+initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
+function initsteps(x0::Section,t,tmax,::Val{m}) where m
+    tmin = base(x0)
     n = Int(round((tmax-tmin)*2^-log2(t.h)))+1
     t = m ∈ (0,1,3) ? (tmin:t.h:tmax) : Vector{typeof(t.h)}(undef,n)
     m ∉ (0,1,3) && (t[1] = tmin)
-    x = Vector{typeof(x0)}(undef,n)
-    x[1] = x0
+    x = Vector{fibertype(x0)}(undef,m ∈ (0,1,3) ? length(t) : n)
+    x[1] = fiber(x0)
     return TensorField(t,x)
 end
-function initsteps(x0,t,tmin,tmax,f,m,B::Val{o}=Val(4)) where o
-    initsteps(x0,t,tmin,tmax,m), Variables{o+1,typeof(x0)}(undef)
+function initsteps(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
+    initsteps(x0,t,tmax,m), Variables{o+1,fibertype(x0)}(undef)
+end
+
+function multistep2!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
+    @inbounds fx[t.s] = f(x)
+    @inbounds explicit(x,t.h,PC ? CAM[k] : CAB[k-1],fx,t.s)
+end
+function predictcorrect2(x,f,fx,t,k::Val{m}=Val(4)) where m
+    iszero(t.s) && initsteps!(x,f,fx,t)
+    @inbounds xti = x[t.i]
+    xi,tn = fiber(xti),base(xti)+t.h
+    xn = multistep2!(xti,f,fx,t,k)
+    t.s = (t.s%m)+1; t.i += 1
+    xn = multistep2!(tn↦(xi+xn),f,fx,t,k,Val(true))
+    t.s = (t.s%m)+1
+    return xi + xn
+end
+function predictcorrect2(x,f,fx,t,::Val{1})
+    @inbounds xti = x[t.i]
+    t.i += 1
+    fiber(xti)+t.h*f((base(xti)+t.h)↦xti)
+end
+
+initsteps2(x0,t,tmax,f,m,B) = initsteps2(init(x0),t,tmax,f,m,B)
+function initsteps2(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
+    initsteps(x0,t,tmax,m), Variables{o,fibertype(x0)}(undef)
 end
 
 function initsteps!(x,f,fx,t,B=Val(4))
@@ -127,6 +168,7 @@ function initsteps!(x,f,fx,t,B=Val(4))
         xi = (base(xi)+t.h) ↦ explicit(xi,f,t.h,B)
         x[t.i+j] = xi
     end
+    t.s = 1+m
     t.i += m
 end
 
@@ -163,31 +205,64 @@ function predictcorrect!(x,f,fx,t,::Val{1})
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 
-odesolve(f,x0,tmin,tmax,tol,m,o) = odesolve(f,x0,∂,tol,Val(m),Val(o))
-function odesolve(f,x0,tmin=0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+init(x0) = 0.0 ↦ x0
+init(x0::Section) = x0
+
+odesolve(f,x0,tmax,tol,m,o) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
+function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     t = TimeStep(2.0^-tol)
     if m == 0 # Improved Euler, Heun's Method
-        x = initsteps(x0,t,tmin,tmax,M)
+        x = initsteps(x0,t,tmax,M)
         for i ∈ 2:length(x)
-            @inbounds x[i] = improved_heun(x[i-1],f,t.h)
+            @inbounds x[i] = heun(x[i-1],f,t.h)
         end
     elseif m == 1 # Singlestep
-        x = initsteps(x0,t,tmin,tmax,M)
+        x = initsteps(x0,t,tmax,M)
         for i ∈ 2:length(x)
             @inbounds x[i] = explicit(x[i-1],f,t.h,B)
         end
     elseif m == 2 # Adaptive Singlestep
-        x = initsteps(x0,t,tmin,tmax,M)
+        x = initsteps(x0,t,tmax,M)
         while timeloop!(x,t,tmax)
             explicit!(x,f,t,B)
         end
     elseif m == 3 # Multistep
-        x,fx = initsteps(x0,t,tmin,tmax,f,M,B)
-        for i ∈ o+1:length(x)
+        x,fx = initsteps(x0,t,tmax,f,M,B)
+        for i ∈ o+1:length(x) # o+1 changed to o
             @inbounds x[i] = predictcorrect(x,f,fx,t,B)
         end
     else # Adaptive Multistep
-        x,fx = initsteps(x0,t,tmin,tmax,f,M,B)
+        x,fx = initsteps(x0,t,tmax,f,M,B)
+        while timeloop!(x,t,tmax,B) # o+1 fix??
+            predictcorrect!(x,f,fx,t,B)
+        end
+    end
+    return x
+end
+
+#integrange
+#integadapt
+
+odesolve2(f,x0,tmax,tol,m,o) = odesolve2(f,x0,tmax,tol,Val(m),Val(o))
+function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+    t = TimeStep(2.0^-tol)
+    if m == 1 # Singlestep
+        x = initsteps(x0,t,tmax,M)
+        for i ∈ 2:length(x)
+            @inbounds x[i] = explicit(x[i-1],f,t.h,B)
+        end
+    elseif m == 2 # Adaptive Singlestep
+        x = initsteps(x0,t,tmax,M)
+        while timeloop!(x,t,tmax)
+            explicit!(x,f,t,B)
+        end
+    elseif m == 3 # Multistep
+        x,fx = initsteps2(x0,t,tmax,f,M,B)
+        for i ∈ (isone(o) ? 2 : o):length(x) # o+1 changed to o
+            @inbounds x[i] = predictcorrect2(x,f,fx,t,B)
+        end
+    else # Adaptive Multistep
+        x,fx = initsteps(x0,t,tmax,f,M,B) # o+1 fix?
         while timeloop!(x,t,tmax,B)
             predictcorrect!(x,f,fx,t,B)
         end
@@ -220,55 +295,5 @@ Base.resize!(x,i,h) = length(x)<i+1 && resize!(x,i+h)
 truncate!(x,i) = length(x)>i+1 && resize!(x,i)
 
 show_progress(x,t,b) = t.i%75000 == 11 && println(time(x[t.i])," out of ",b)
-
-function __init__()
-    @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" begin
-        Makie.lines(t::SpaceCurve;args...) = Makie.lines(t.cod;color=value.(speed(t).cod),args...)
-        Makie.lines(t::PlaneCurve;args...) = Makie.lines(t.cod;color=value.(speed(t).cod),args...)
-        Makie.lines(t::RealFunction;args...) = Makie.lines(t.dom,getindex.(value.(t.cod),1);color=value.(speed(t).cod),args...)
-        Makie.linesegments(t::SpaceCurve;args...) = Makie.linesegments(t.cod;color=value.(speed(t).cod),args...)
-        Makie.linesegments(t::PlaneCurve;args...) = Makie.linesegments(t.cod;color=value.(speed(t).cod),args...)
-        Makie.linesegments(t::RealFunction;args...) = Makie.linesegments(t.dom,getindex.(value.(t.cod),1);color=value.(speed(t).cod),args...)
-        Makie.volume(t::GridParametric{<:Chain,<:Hyperrectangle};args...) = Makie.volume(t.dom.v[1],t.dom.v[2],t.dom.v[3],t.cod;args...)
-        Makie.volumeslices(t::GridParametric{<:Chain,<:Hyperrectangle};args...) = Makie.volumeslices(t.dom.v[1],t.dom.v[2],t.dom.v[3],t.cod;args...)
-        Makie.surface(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.surface(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.contour(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contour(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.contourf(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contourf(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.contour3d(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.contour3d(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.heatmap(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.heatmap(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.wireframe(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.wireframe(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        #Makie.spy(t::GridSurface{<:Chain,<:RealRegion};args...) = Makie.spy(t.dom.v[1],t.dom.v[2],t.cod;args...)
-        Makie.streamplot(f::Function,t::Rectangle;args...) = Makie.streamplot(f,t.v[1],t.v[2];args...)
-        Makie.streamplot(f::Function,t::Hyperrectangle;args...) = Makie.streamplot(f,t.v[1],t.v[2],t.v[3];args...)
-        Makie.streamplot(m::TensorField{R,<:RealRegion,<:Real} where R;args...) = Makie.streamplot(tangent(m);args...)
-        Makie.streamplot(m::TensorField{R,<:ChainBundle,<:Real} where R,dims...;args...) = Makie.streamplot(tangent(m),dims...;args...)
-        Makie.streamplot(m::VectorField{R,<:ChainBundle} where R,dims...;args...) = Makie.streamplot(p->Makie.Point(m(Chain(one(eltype(p)),p.data...))),dims...;args...)
-        Makie.streamplot(m::VectorField{R,<:RealRegion} where R;args...) = Makie.streamplot(p->Makie.Point(m(Chain(p.data...))),domain(m).v...;args...)
-        Makie.arrows(t::VectorField{<:Chain,<:Rectangle};args...) = Makie.arrows(t.dom.v[1],t.dom.v[2],getindex.(t.cod,1),getindex.(t.cod,2);args...)
-        Makie.arrows!(t::VectorField{<:Chain,<:Rectangle};args...) = Makie.arrows!(t.dom.v[1],t.dom.v[2],getindex.(t.cod,1),getindex.(t.cod,2);args...)
-        Makie.arrows(t::VectorField{<:Chain,<:Hyperrectangle};args...) = Makie.arrows(Makie.Point.(domain(t))[:],Makie.Point.(codomain(t))[:];args...)
-        Makie.arrows!(t::VectorField{<:Chain,<:Hyperrectangle};args...) = Makie.arrows!(Makie.Point.(domain(t))[:],Makie.Point.(codomain(t))[:];args...)
-        Makie.arrows(t::Rectangle,f::Function;args...) = Makie.arrows(t.v[1],t.v[2],f;args...)
-        Makie.arrows!(t::Rectangle,f::Function;args...) = Makie.arrows!(t.v[1],t.v[2],f;args...)
-        Makie.arrows(t::Hyperrectangle,f::Function;args...) = Makie.arrows(t.v[1],t.v[2],t.v[3],f;args...)
-        Makie.arrows!(t::Hyperrectangle,f::Function;args...) = Makie.arrows!(t.v[1],t.v[2],t.v[3],f;args...)
-        Makie.arrows(t::MeshFunction;args...) = Makie.arrows(points(domain(t)),codomain(t);args...)
-        Makie.arrows!(t::MeshFunction;args...) = Makie.arrows!(points(domain(t)),codomain(t);args...)
-        Makie.mesh(t::ElementFunction;args...) = Makie.mesh(domain(t);color=codomain(t),args...)
-        Makie.mesh!(t::ElementFunction;args...) = Makie.mesh!(domain(t);color=codomain(t),args...)
-        Makie.mesh(t::MeshFunction;args...) = Makie.mesh(domain(t);color=codomain(t),args...)
-        Makie.mesh!(t::MeshFunction;args...) = Makie.mesh!(domain(t);color=codomain(t),args...)
-        Makie.wireframe(t::ElementFunction;args...) = Makie.wireframe(value(domain(t));color=codomain(t),args...)
-        Makie.wireframe!(t::ElementFunction;args...) = Makie.wireframe!(value(domain(t));color=codomain(t),args...)
-    end
-    @require UnicodePlots="b8865327-cd53-5732-bb35-84acbb429228" begin
-        UnicodePlots.lineplot(t::PlaneCurve;args...) = UnicodePlots.lineplot(getindex.(t.cod,1),getindex.(t.cod,2);args...)
-        UnicodePlots.lineplot(t::RealFunction;args...) = UnicodePlots.lineplot(t.dom,getindex.(value.(t.cod),1);args...)
-        UnicodePlots.contourplot(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.contourplot(t.dom.v[1][2:end-1],t.dom.v[2][2:end-1],(x,y)->t(Chain(x,y));args...)
-        UnicodePlots.surfaceplot(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.surfaceplot(t.dom.v[1][2:end-1],t.dom.v[2][2:end-1],(x,y)->t(Chain(x,y));args...)
-        UnicodePlots.spy(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.spy(t.cod;args...)
-        UnicodePlots.heatmap(t::GridSurface{<:Chain,<:RealRegion};args...) = UnicodePlots.heatmap(t.cod;args...)
-    end
-end
 
 end # module

@@ -7,7 +7,7 @@ Lorenz(x) = Chain(
 	x[1]*(28.0-x[3])-x[2],
 	x[1]*x[2]-(8/3)*x[3])
 for k ∈ 0:4
-    @test (odesolve(Lorenz,x0,0,2π,7,Val(k),Val(4)); true)
+    @test (odesolve(Lorenz,x0,2π,7,Val(k),Val(4)); true)
 end
 @test (\(assemblemassfunction(initmesh(0:1/5:1)[3],x->x[2]*sin(x[2]))...); true)
 @test (\(assemblemassfunction(initmesh(0:1/5:1)[3],x->2x[2]*sin(2π*x[2])+3)...); true)
