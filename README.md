@@ -17,11 +17,11 @@ This Julia project originally started as a FORTRAN 95 project called [adapode](h
 ```julia
 using Grassmann, Adapode, Makie
 x0 = Chain(10.0,10.0,10.0)
-Lorenz(x) = Chain(
-	10.0(x[2]-x[1]),
-	x[1]*(28.0-x[3])-x[2],
-	x[1]*x[2]-(8/3)*x[3])
-lines(odesolve(Lorenz,x0))
+Lorenz(σ,r,b) = x -> Chain(
+	σ*(x[2]-x[1]),
+	x[1]*(r-x[3])-x[2],
+	x[1]*x[2]-b*x[3])
+lines(odesolve(Lorenz(10.0,28.0,8/3),x0))
 ```
 Supported ODE solvers include:
 explicit Euler,

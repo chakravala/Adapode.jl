@@ -18,12 +18,11 @@ module Adapode
 #  |___|___||_____||___._||   __||_____||_____||_____|
 #                         |__|
 
-using SparseArrays, LinearAlgebra
-using AbstractTensors, DirectSum, Grassmann, TensorFields, Requires
+using SparseArrays, LinearAlgebra, Grassmann, TensorFields, Requires
 import Grassmann: value, vector, valuetype, tangent, list
+import Grassmann: Values, Variables, FixedVector
+import Grassmann: Scalar, GradedVector, Bivector, Trivector
 import Base: @pure
-import AbstractTensors: Values, Variables, FixedVector
-import AbstractTensors: Scalar, GradedVector, Bivector, Trivector
 
 export Values, odesolve, odesolve2
 export initmesh, pdegrad
@@ -67,6 +66,7 @@ function weights(c,fx)
     return cfx
 end
 @pure shift(::Val{m},::Val{k}=Val(1)) where {m,k} = Values{m,Int}(list(k,m+k-1))
+#@pure shift(M::Val{m},i) where m = ((shift(M,Val{0}()).+i).%m).+1
 @pure shift(::Val{m},l::Val,i) where m = ((shift(l,Val(0)).+i).%m).+1
 function explicit(x,h,c,fx)
     l = length(c)
@@ -265,6 +265,22 @@ function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where
         x,fx = initsteps(x0,t,tmax,f,M,B) # o+1 fix?
         while timeloop!(x,t,tmax,B)
             predictcorrect!(x,f,fx,t,B)
+        end
+    end
+    return x
+end
+
+function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+    x0,t = init(x),TimeStep(2.0^-tol)
+    if m == 0 # Improved Euler, Heun's Method
+        x = initsteps(x0,t,tmax,M)
+        for i ∈ 2:length(x)
+            @inbounds x[i] = heun(x[i-1],f,t.h)
+        end
+    elseif m == 3 # Multistep
+        x,fx = initsteps(x0,t,tmax,f,M,B)
+        for i ∈ o+1:length(x)
+            @inbounds x[i] = predictcorrect(x,f,fx,t,B)
         end
     end
     return x
