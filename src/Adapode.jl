@@ -18,7 +18,7 @@ module Adapode
 #  |___|___||_____||___._||   __||_____||_____||_____|
 #                         |__|
 
-using SparseArrays, LinearAlgebra, Grassmann, TensorFields, Requires
+using SparseArrays, LinearAlgebra, Grassmann, Cartan, Requires
 import Grassmann: value, vector, valuetype, tangent, list
 import Grassmann: Values, Variables, FixedVector
 import Grassmann: Scalar, GradedVector, Bivector, Trivector
@@ -78,12 +78,12 @@ function explicit(x,h,c,fx,i)
 end
 function heun(x,f::Function,h)
     hfx = h*f(x)
-    fiber(x)+(hfx+h*f((base(x)+h)↦(fiber(x)+hfx)))/2
+    fiber(x)+(hfx+h*f((point(x)+h)↦(fiber(x)+hfx)))/2
 end
 function heun(x,f::TensorField,t)
     fx = f[t.i]
     hfx = t.h*fx
-    fiber(x)+(hfx+t.h*f(base(fx)↦(fiber(x)+hfx)))/2
+    fiber(x)+(hfx+t.h*f(point(fx)↦(fiber(x)+hfx)))/2
 end
 
 @pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
@@ -94,7 +94,7 @@ function butcher(x::Section{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) wher
     fx = F<:Vector ? FixedVector{n,F}(undef) : Variables{n,F}(undef)
     @inbounds fx[1] = f(x)
     for k ∈ 2:n
-        @inbounds fx[k] = f((base(x)+h*sum(b[k-1]))↦explicit(x,h,b[k-1],fx))
+        @inbounds fx[k] = f((point(x)+h*sum(b[k-1]))↦explicit(x,h,b[k-1],fx))
     end
     return fx
 end
@@ -108,7 +108,7 @@ end # more accurate compared with CAB[k] methods
 function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti),base(xti)+t.h
+    xi,tn = fiber(xti),point(xti)+t.h
     xn = multistep!(xti,f,fx,t,k)
     t.s = (t.s%(m+1))+1; t.i += 1
     xn = multistep!(tn↦(xi+xn),f,fx,t,k,Val(true))
@@ -117,7 +117,7 @@ end
 function predictcorrect(x,f,fx,t,::Val{1})
     @inbounds xti = x[t.i]
     t.i += 1
-    fiber(xti)+t.h*f((base(xti)+t.h)↦(fiber(xti)+t.h*f(xti)))
+    fiber(xti)+t.h*f((point(xti)+t.h)↦(fiber(xti)+t.h*f(xti)))
 end
 
 initsteps(x0,t,tmax,m) = initsteps(init(x0),t,tmax,m)
@@ -142,7 +142,7 @@ end
 function predictcorrect2(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti),base(xti)+t.h
+    xi,tn = fiber(xti),point(xti)+t.h
     xn = multistep2!(xti,f,fx,t,k)
     t.s = (t.s%m)+1; t.i += 1
     xn = multistep2!(tn↦(xi+xn),f,fx,t,k,Val(true))
@@ -152,7 +152,7 @@ end
 function predictcorrect2(x,f,fx,t,::Val{1})
     @inbounds xti = x[t.i]
     t.i += 1
-    fiber(xti)+t.h*f((base(xti)+t.h)↦xti)
+    fiber(xti)+t.h*f((point(xti)+t.h)↦xti)
 end
 
 initsteps2(x0,t,tmax,f,m,B) = initsteps2(init(x0),t,tmax,f,m,B)
@@ -165,7 +165,7 @@ function initsteps!(x,f,fx,t,B=Val(4))
     @inbounds xi = x[t.i]
     for j ∈ 1:m
         @inbounds fx[j] = f(xi)
-        xi = (base(xi)+t.h) ↦ explicit(xi,f,t.h,B)
+        xi = (point(xi)+t.h) ↦ explicit(xi,f,t.h,B)
         x[t.i+j] = xi
     end
     t.s = 1+m
@@ -175,10 +175,10 @@ end
 function explicit!(x,f,t,B=Val(5))
     resize!(x,t.i,10000)
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti)
+    xi = fiber(xti)
     fx,b = butcher(xti,f,t.h,B,Val(true)),butcher(B,Val(true))
     t.i += 1
-    @inbounds x[t.i] = (base(xti)+t.h) ↦ explicit(xti,t.h,b[end-1],fx)
+    @inbounds x[t.i] = (point(xti)+t.h) ↦ explicit(xti,t.h,b[end-1],fx)
     @inbounds t.e = maximum(abs.(t.h*value(b[end]⋅fx)))
 end
 
@@ -186,7 +186,7 @@ function predictcorrect!(x,f,fx,t,B::Val{m}=Val(4)) where m
     resize!(x,t.i+m,10000)
     iszero(t.s) && initsteps!(x,f,fx,t)
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti),base(xti)+t.h
+    xi,tn = fiber(xti),point(xti)+t.h
     p = xi + multistep!(xti,f,fx,t,B)
     t.s = (t.s%(m+1))+1
     c = xi + multistep!(tn↦p,f,fx,t,B,Val(true))
@@ -196,7 +196,7 @@ function predictcorrect!(x,f,fx,t,B::Val{m}=Val(4)) where m
 end
 function predictcorrect!(x,f,fx,t,::Val{1})
     @inbounds xti = x[t.i]
-    xi,tn = fiber(xti),base(xti)+t.h
+    xi,tn = fiber(xti),point(xti)+t.h
     p = xi + t.h*f(xti)
     c = xi + t.h*f(tn↦p)
     t.i += 1
@@ -298,7 +298,7 @@ function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
         t.s = 0
     end
     iszero(t.s) && checkstep!(t)
-    d = tmax-time(x[t.i])
+    d = tmax-point(x[t.i])
     d ≤ t.h && (t.h = d)
     done = d ≤ t.hmax
     done && truncate!(x,t.i-1)
@@ -310,6 +310,6 @@ time(x) = x[1]
 Base.resize!(x,i,h) = length(x)<i+1 && resize!(x,i+h)
 truncate!(x,i) = length(x)>i+1 && resize!(x,i)
 
-show_progress(x,t,b) = t.i%75000 == 11 && println(time(x[t.i])," out of ",b)
+show_progress(x,t,b) = t.i%75000 == 11 && println(point(x[t.i])," out of ",b)
 
 end # module

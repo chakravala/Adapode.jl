@@ -16,15 +16,15 @@ export assemble, assembleglobal, assemblestiffness, assembleconvection, assemble
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assemblemassincidence, asssemblemassnodes, assemblenodes
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
-export solvepoisson, solveSD, solvetransport, solvedirichlet, adaptpoisson
+export solvepoisson, solvetransport, solvetransportdiffusion, solvedirichlet, adaptpoisson
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
 export submesh, detsimplex, iterable, callable, value, edgelengths, laplacian
 export boundary, interior, trilength, trinormals, incidence, degrees
-import Grassmann: norm, column, columns, points, pointset, edges
+import Grassmann: norm, column, columns
 using Base.Threads
 
-import TensorFields: iterpts, iterable, callable, revrot
-import TensorFields: gradienthat, laplacian, gradient, assemblelocal!
+import Cartan: points, pointset, edges, iterpts, iterable, callable, revrot
+import Cartan: gradienthat, laplacian, gradient, assemblelocal!
 
 trilength(rc) = value.(abs.(value(rc)))
 function trinormals(t)
@@ -52,12 +52,29 @@ function assembleglobal(M,t,m::T,c::C,g::F) where {T<:AbstractVector,C<:Abstract
     end
     return A
 end
+function assembleglobal(M,X::SimplexFrameBundle,m::T,c::C,g::F) where {T<:AbstractVector,C<:AbstractVector,F<:AbstractVector}
+    np = length(points(X)); A = spzeros(np,np); t = immersion(X)
+    for k ∈ 1:length(t)
+        assemblelocal!(A,M(c[k],g[k],Val(mdims(Manifold(X)))),m[k],value(t[k]))
+    end
+    return A
+end
 
-import TensorFields: weights, degrees, assembleincidence, incidence
+import Cartan: weights, degrees, assembleincidence, incidence
 
 assemblemassincidence(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f),iterable(t,m),iterable(t,l))
 function assemblemassincidence(t,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
     np,n = length(points(t)),Val(mdims(Manifold(t)))
+    M,b,v = spzeros(np,np), zeros(np), f
+    for k ∈ 1:length(t)
+        tk = value(t[k])
+        assemblelocal!(M,mass(nothing,nothing,n),m[k],tk)
+        b[tk] .+= v[tk]*l[k]
+    end
+    return M,b
+end
+function assemblemassincidence(X::SimplexFrameBundle,f::F,m::V,l::T) where {F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
+    np,n,t = length(points(X)),Val(mdims(Manifold(X))),immersion(X)
     M,b,v = spzeros(np,np), zeros(np), f
     for k ∈ 1:length(t)
         tk = value(t[k])
@@ -71,9 +88,10 @@ assemblefunction(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(
 assemblenodes(t,f,m=volumes(t),d=degrees(t,m)) = assembleincidence(t,iterpts(t,f)./d,m)
 assemblemassload(t,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,inv.(d),m,l)
 assemblemassfunction(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f)/mdims(t),iterable(t,m),iterable(t,l))
+assemblemassfunction(tf::TensorField,m=volumes(base(tf)),l=m) = assemblemassfunction(base(tf),fiber(tf),m,l)
 assemblemassnodes(t,f,m=volumes(t),l=m,d=degrees(t)) = assemblemassincidence(t,iterpts(t,f)./d,iterable(t,m),iterable(t,l))
 
-import TensorFields: assembleload, interp, pretni
+import Cartan: assembleload, interp, pretni
 
 #mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 mass(a,b,::Val{N}) where N = (x=Submanifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
@@ -82,6 +100,8 @@ assemblemass(t,m=volumes(t)) = assembleglobal(mass,t,iterpts(t,m))
 stiffness(c,g::Float64,::Val{2}) = (cg = c*g^2; Chain(Chain(cg,-cg),Chain(-cg,cg)))
 stiffness(c,g,::Val{N}) where N = Chain{Submanifold(N),1}(map.(*,c,value(g).⋅Ref(g)))
 assemblestiffness(t,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? t : means(t),c),g)
+assemblestiffness(t::SimplexFrameBundle,c=1,m=volumes(t),g=gradienthat(t,m)) = assembleglobal(stiffness,t,m,iterable(c isa Real ? immersion(t) : means(t),c),g)
+
 # iterable(means(t),c) # mapping of c.(means(t))
 
 #=function sonicstiffness(c,g,::Val{N}) where N
@@ -133,18 +153,19 @@ function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     b = assemblenodes(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
-    return (A+R)\(b+r)
+    return TensorField(t,(A+R)\(b+r))
 end
 
-function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
+function solvetransportdiffusion(tf,eκ,c,δ,gD=0,gN=0)
+    t,f,e,κ = base(tf),fiber(tf),base(eκ),fiber(eκ)
     m = volumes(t)
     g = gradienthat(t,m)
     A = assemblestiffness(t,c,m,g)
-    b = means(t,f)
+    b = means(immersion(t),f)
     C = assembleconvection(t,b,m,g)
     Sd = assembleSD(t,sqrt(δ)*b,m,g)
     R,r = assemblerobin(e,κ,gD,gN)
-    return (A+R-C'+Sd)\r
+    return TensorField(t,(A+R-C'+Sd)\r)
 end
 
 function solvetransport(t,e,c,ϵ=0.1)
@@ -153,7 +174,7 @@ function solvetransport(t,e,c,ϵ=0.1)
     A = assemblestiffness(t,ϵ,m,g)
     b = assembleload(t,m)
     C = assembleconvection(t,c,m,g)
-    return solvedirichlet(A+C,b,e)
+    TensorField(t,solvedirichlet(A+C,b,e))
 end
 
 function adaptpoisson(g,p,e,t,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
@@ -171,8 +192,12 @@ function adaptpoisson(g,p,e,t,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
     return g,p,e,t
 end
 
-solvedirichlet(M,b,e::ChainBundle) = solvedirichlet(M,b,pointset(e))
-solvedirichlet(M,b,e::ChainBundle,u) = solvedirichlet(M,b,pointset(e),u)
+#solvedirichlet(M,b,e::ChainBundle) = solvedirichlet(M,b,pointset(e))
+#solvedirichlet(M,b,e::ChainBundle,u) = solvedirichlet(M,b,pointset(e),u)
+solvedirichlet(M,b,e::SimplexFrameBundle) = solvedirichlet(M,b,vertices(e))
+solvedirichlet(M,b,e::SimplexManifold) = solvedirichlet(M,b,vertices(e))
+solvedirichlet(M,b,e::SimplexFrameBundle,u) = solvedirichlet(M,b,vertices(e),u)
+solvedirichlet(M,b,e::SimplexManifold,u) = solvedirichlet(M,b,vertices(e),u)
 function solvedirichlet(A,b,fixed,boundary)
     neq = length(b)
     free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
@@ -187,7 +212,7 @@ function solvedirichlet(M,b,fixed)
     return ξ
 end
 
-import TensorFields: interior
+import Cartan: interior
 
 solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
 export solvehomogenous, solveboundary
@@ -195,7 +220,7 @@ const solveboundary = solvedirichlet # deprecate
 const edgelengths = volumes # deprecate
 const boundary = pointset # deprecate
 
-import TensorFields: facesindices, edgesindices, neighbor, neighbors, centroidvectors
+import Cartan: facesindices, edgesindices, neighbor, neighbors, centroidvectors
 
 #=
 facesindices(t,cols=columns(t)) = mdims(t) == 3 ? edgesindices(t,cols) : throw(error())

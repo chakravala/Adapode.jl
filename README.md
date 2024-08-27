@@ -12,7 +12,7 @@
 [![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
 
-This Julia project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode).
+This Julia project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode) and evolved with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) and [Cartan.jl](https://github.com/chakravala/Cartan.jl).
 
 ```julia
 using Grassmann, Adapode, Makie
@@ -46,23 +46,23 @@ L2Projector(initmesh(0:1/5:1)[3],x->2x[2]*sin(2π*x[2])+3)
 
 Partial differential equations can also be assembled with various additional methods:
 ```julia
-PoissonSolver(p,e,t,c,f,κ,gD=1,gN=0) = mesh(t,color=solvepoisson(t,e,c,f,κ,gD,gN))
 function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     m = volumes(t)
     b = assemblefunction(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
-    return (A+R)\(b+r)
+    return TensorField(t,(A+R)\(b+r))
 end
-function solveSD(t,e,c,f,δ,κ,gD=0,gN=0)
+function solvetransportdiffusion(tf,eκ,c,δ,gD=0,gN=0)
+    t,f,e,κ = base(tf),fiber(tf),base(eκ),fiber(eκ)
     m = volumes(t)
     g = gradienthat(t,m)
     A = assemblestiffness(t,c,m,g)
-    b = means(t,f)
+    b = means(immersion(t),f)
     C = assembleconvection(t,b,m,g)
     Sd = assembleSD(t,sqrt(δ)*b,m,g)
     R,r = assemblerobin(e,κ,gD,gN)
-    return (A+R-C'+Sd)\r
+    return TensorField(t,(A+R-C'+Sd)\r)
 end
 function solvetransport(t,e,c,ϵ=0.1)
     m = volumes(t)
@@ -70,37 +70,38 @@ function solvetransport(t,e,c,ϵ=0.1)
     A = assemblestiffness(t,ϵ,m,g)
     b = assembleload(t,m)
     C = assembleconvection(t,c,m,g)
-    return solvedirichlet(A+C,b,e)
+    return TensorField(t,solvedirichlet(A+C,b,e))
 end
 ```
-Such modular methods can work on input meshes of any dimension.
+Such modular methods can work with a `TensorField` of any dimension.
 The following examples are based on trivially generated 1 dimensional domains:
 ```Julia
 function BackwardEulerHeat1D()
     x,m = 0:0.01:1,100; p,e,t = initmesh(x)
     T = range(0,0.5,length=m+1) # time grid
     ξ = 0.5.-abs.(0.5.-x) # initial condition
-    A = assemblestiffness(t) # assemble(t,1,2x)
-    M,b = assemblemassfunction(t,2x).+assemblerobin(e,1e6,0,0)
+    A = assemblestiffness(p(t)) # assemble(p(t),1,2x)
+    M,b = assemblemassfunction(p(t),2x).+assemblerobin(p(e),1e6,0,0)
     h = Float64(T.step); LHS = M+h*A # time step
     for l ∈ 1:m
         ξ = LHS\(M*ξ+h*b); l%10==0 && println(l*h)
     end
-    mesh(t,color=ξ)
+    lines(TensorField(p(t),ξ))
 end
 function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
     ϵ = 1.0
+    pt,pe = p(t),p(e)
     while ϵ > 5e-5 && length(t) < 10000
-        m = volumes(t)
-        h = gradienthat(t,m)
-        A,M,b = assemble(t,c,a,f,m,h)
-        ξ = solvedirichlet(A+M,b,e)
-        η = jumps(t,c,a,f,ξ,m,h)
-        display(mesh(t,color=ξ,shading=false))
+        m = volumes(pt)
+        h = gradienthat(pt,m)
+        A,M,b = assemble(pt,c,a,f,m,h)
+        ξ = solvedirichlet(A+M,b,pe)
+        η = jumps(pt,c,a,f,ξ,m,h)
+        display(lines(TensorField(pt,ξ)))
         if typeof(g)<:AbstractRange
-            scatter!(p,ξ,markersize=0.01)
+            #scatter!(p,ξ,markersize=0.01)
         else
-            wireframe!(t,color=(:red,0.6),linewidth=3)
+            #wireframe!(t,color=(:red,0.6),linewidth=3)
         end
         ϵ = sqrt(norm(η)^2/length(η))
         println(t,", ϵ=$ϵ, α=$(ϵ/maximum(η))"); sleep(0.5)
@@ -110,5 +111,5 @@ function PoissonAdaptive(g,p,e,t,c=1,a=0,f=1)
 end
 PoissonAdaptive(refinemesh(0:0.25:1)...,1,0,x->exp(-100abs2(x[2]-0.5)))
 ```
-More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources.
+More general problems for finite element boundary value problems are also enabled by mesh representations imported from external sources and managed by `Cartan` via `Grassmann` algebra.
 These methods can automatically generalize to higher dimensional manifolds and are compatible with discrete differential geometry.

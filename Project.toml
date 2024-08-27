@@ -1,20 +1,20 @@
 name = "Adapode"
 uuid = "0750cfb5-909a-49d7-927e-29b6595444bf"
 authors = ["Michael Reed"]
-version = "0.2.9"
+version = "0.3"
 
 [deps]
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
+Cartan = "e24af43f-9fd5-4672-9264-a75f3ae40eb2"
 Grassmann = "4df31cd9-4c27-5bea-88d0-e6a7146666d8"
-TensorFields = "86e2b4fd-d9c8-44dc-a03f-e0a387f3b4e6"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 
 [compat]
 julia = "1"
 Requires = "1"
-TensorFields = "0.1"
-Grassmann = "0.8"
+Grassmann = "0.8,0.9"
+Cartan = "0.3"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
