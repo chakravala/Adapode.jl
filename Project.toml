@@ -1,7 +1,7 @@
 name = "Adapode"
 uuid = "0750cfb5-909a-49d7-927e-29b6595444bf"
 authors = ["Michael Reed"]
-version = "0.3"
+version = "0.3.1"
 
 [deps]
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
@@ -13,7 +13,7 @@ LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 [compat]
 julia = "1"
 Requires = "1"
-Grassmann = "0.8,0.9"
+Grassmann = "0.8"
 Cartan = "0.3"
 
 [extras]

@@ -23,6 +23,7 @@ import Grassmann: value, vector, valuetype, tangent, list
 import Grassmann: Values, Variables, FixedVector
 import Grassmann: Scalar, GradedVector, Bivector, Trivector
 import Base: @pure
+import Cartan: resize, resize_lastdim!, extract, assign!
 
 export Values, odesolve, odesolve2
 export initmesh, pdegrad
@@ -47,7 +48,7 @@ mutable struct TimeStep{T}
     e::T
     i::Int
     s::Int
-    function TimeStep(h,hmin=1e-16,hmax=1e-4,emin=10^(log2(h)-3),emax=10^log2(h))
+    function TimeStep(h,hmin=1e-16,hmax=h>1e-4 ? h : 1e-4,emin=10^(log2(h)-3),emax=10^log2(h))
         checkstep!(new{typeof(h)}(h,hmin,hmax,emin,emax,(emin+emax)/2,1,0))
     end
 end
@@ -77,13 +78,17 @@ function explicit(x,h,c,fx,i)
     weights(h*c,fx[shift(Val(m),Val(l),i+(m-l))])
 end
 function heun(x,f::Function,h)
-    hfx = h*f(x)
-    fiber(x)+(hfx+h*f((point(x)+h)↦(fiber(x)+hfx)))/2
+    hfx = h*localfiber(f(x))
+    fiber(x)+(hfx+h*fiber(f((point(x)+h)↦(fiber(x)+hfx))))/2
 end
-function heun(x,f::TensorField,t)
+function heun(x,f::TensorField,h)
+    hfx = h*localfiber(f(x))
+    fiber(x)+(hfx+h*localfiber(f((point(x)+h)↦(fiber(x)+hfx))))/2
+end
+function heun2(x,f::TensorField,t)
     fx = f[t.i]
     hfx = t.h*fx
-    fiber(x)+(hfx+t.h*f(point(fx)↦(fiber(x)+hfx)))/2
+    fiber(x)+(hfx+t.h*localfiber(f(point(fx)↦(fiber(x)+hfx))))/2
 end
 
 @pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
@@ -91,23 +96,26 @@ end
 function butcher(x::Section{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
     b = butcher(v,a)
     n = length(b)-A
-    fx = F<:Vector ? FixedVector{n,F}(undef) : Variables{n,F}(undef)
-    @inbounds fx[1] = f(x)
+    # switch to isbits(F)
+    fx = F<:AbstractVector ? FixedVector{n,F}(undef) : Variables{n,F}(undef)
+    @inbounds fx[1] = localfiber(f(x))
     for k ∈ 2:n
-        @inbounds fx[k] = f((point(x)+h*sum(b[k-1]))↦explicit(x,h,b[k-1],fx))
+        @inbounds fx[k] = localfiber(f((point(x)+h*sum(b[k-1]))↦explicit(x,h,b[k-1],fx)))
     end
     return fx
 end
 explicit(x,f::Function,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
-explicit(x,f::Function,h,::Val{1}) = fiber(x)+h*f(x)
+explicit(x,f::Function,h,::Val{1}) = fiber(x)+h*localfiber(f(x))
+explicit(x,f::TensorField,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
+explicit(x,f::TensorField,h,::Val{1}) = fiber(x)+h*localfiber(f(x))
 
 function multistep!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
-    fx[t.s] = f(x)
+    fx[t.s] = localfiber(f(x))
     explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
 end # more accurate compared with CAB[k] methods
 function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
-    @inbounds xti = x[t.i]
+    xti = extract(x,t.i)
     xi,tn = fiber(xti),point(xti)+t.h
     xn = multistep!(xti,f,fx,t,k)
     t.s = (t.s%(m+1))+1; t.i += 1
@@ -115,28 +123,28 @@ function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     return xi + xn
 end
 function predictcorrect(x,f,fx,t,::Val{1})
-    @inbounds xti = x[t.i]
+    xti = extract(x,t.i)
     t.i += 1
-    fiber(xti)+t.h*f((point(xti)+t.h)↦(fiber(xti)+t.h*f(xti)))
+    fiber(xti)+t.h*localfiber(f((point(xti)+t.h)↦(fiber(xti)+t.h*localfiber(f(xti)))))
 end
 
 initsteps(x0,t,tmax,m) = initsteps(init(x0),t,tmax,m)
 initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
 function initsteps(x0::Section,t,tmax,::Val{m}) where m
-    tmin = base(x0)
-    n = Int(round((tmax-tmin)*2^-log2(t.h)))+1
+    tmin,f0 = base(x0),fiber(x0)
+    n = Int(round((tmax-tmin)/t.h))+1
     t = m ∈ (0,1,3) ? (tmin:t.h:tmax) : Vector{typeof(t.h)}(undef,n)
     m ∉ (0,1,3) && (t[1] = tmin)
-    x = Vector{fibertype(x0)}(undef,m ∈ (0,1,3) ? length(t) : n)
-    x[1] = fiber(x0)
-    return TensorField(t,x)
+    x = Array{fibertype(fibertype(x0)),ndims(f0)+1}(undef,size(f0)...,m ∈ (0,1,3) ? length(t) : n)
+    assign!(x,1,fiber(f0))
+    return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
 function initsteps(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
     initsteps(x0,t,tmax,m), Variables{o+1,fibertype(x0)}(undef)
 end
 
 function multistep2!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
-    @inbounds fx[t.s] = f(x)
+    @inbounds fx[t.s] = localfiber(f(x))
     @inbounds explicit(x,t.h,PC ? CAM[k] : CAB[k-1],fx,t.s)
 end
 function predictcorrect2(x,f,fx,t,k::Val{m}=Val(4)) where m
@@ -152,7 +160,7 @@ end
 function predictcorrect2(x,f,fx,t,::Val{1})
     @inbounds xti = x[t.i]
     t.i += 1
-    fiber(xti)+t.h*f((point(xti)+t.h)↦xti)
+    fiber(xti)+t.h*localfiber(f((point(xti)+t.h)↦xti))
 end
 
 initsteps2(x0,t,tmax,f,m,B) = initsteps2(init(x0),t,tmax,f,m,B)
@@ -162,11 +170,11 @@ end
 
 function initsteps!(x,f,fx,t,B=Val(4))
     m = length(fx)-2
-    @inbounds xi = x[t.i]
+    xi = extract(x,t.i)
     for j ∈ 1:m
-        @inbounds fx[j] = f(xi)
+        @inbounds fx[j] = localfiber(f(xi))
         xi = (point(xi)+t.h) ↦ explicit(xi,f,t.h,B)
-        x[t.i+j] = xi
+        assign!(x,t.i+j,xi)
     end
     t.s = 1+m
     t.i += m
@@ -174,34 +182,34 @@ end
 
 function explicit!(x,f,t,B=Val(5))
     resize!(x,t.i,10000)
-    @inbounds xti = x[t.i]
+    xti = extract(x,t.i)
     xi = fiber(xti)
     fx,b = butcher(xti,f,t.h,B,Val(true)),butcher(B,Val(true))
     t.i += 1
-    @inbounds x[t.i] = (point(xti)+t.h) ↦ explicit(xti,t.h,b[end-1],fx)
+    assign!(x,t.i,(point(xti)+t.h) ↦ explicit(xti,t.h,b[end-1],fx))
     @inbounds t.e = maximum(abs.(t.h*value(b[end]⋅fx)))
 end
 
 function predictcorrect!(x,f,fx,t,B::Val{m}=Val(4)) where m
     resize!(x,t.i+m,10000)
     iszero(t.s) && initsteps!(x,f,fx,t)
-    @inbounds xti = x[t.i]
+    xti = extract(x,t.i)
     xi,tn = fiber(xti),point(xti)+t.h
     p = xi + multistep!(xti,f,fx,t,B)
     t.s = (t.s%(m+1))+1
     c = xi + multistep!(tn↦p,f,fx,t,B,Val(true))
     t.i += 1
-    @inbounds x[t.i] = tn ↦ c
+    assign!(x,t.i,tn ↦ c)
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 function predictcorrect!(x,f,fx,t,::Val{1})
-    @inbounds xti = x[t.i]
+    xti = extract(x,t.i)
     xi,tn = fiber(xti),point(xti)+t.h
-    p = xi + t.h*f(xti)
-    c = xi + t.h*f(tn↦p)
+    p = xi + t.h*localfiber(f(xti))
+    c = xi + t.h*localfiber(f(tn↦p))
     t.i += 1
     resize!(x,t.i,10000)
-    @inbounds x[t.i] = tn ↦ c
+    assign!(x,t.i,tn ↦ c)
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 
@@ -213,13 +221,13 @@ function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where 
     t = TimeStep(2.0^-tol)
     if m == 0 # Improved Euler, Heun's Method
         x = initsteps(x0,t,tmax,M)
-        for i ∈ 2:length(x)
-            @inbounds x[i] = heun(x[i-1],f,t.h)
+        for i ∈ 2:size(x)[end]
+            assign!(x,i,heun(extract(x,i-1),f,t.h))
         end
     elseif m == 1 # Singlestep
         x = initsteps(x0,t,tmax,M)
-        for i ∈ 2:length(x)
-            @inbounds x[i] = explicit(x[i-1],f,t.h,B)
+        for i ∈ 2:size(x)[end]
+            assign!(x,i,explicit(extract(x,i-1),f,t.h,B))
         end
     elseif m == 2 # Adaptive Singlestep
         x = initsteps(x0,t,tmax,M)
@@ -228,8 +236,8 @@ function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where 
         end
     elseif m == 3 # Multistep
         x,fx = initsteps(x0,t,tmax,f,M,B)
-        for i ∈ o+1:length(x) # o+1 changed to o
-            @inbounds x[i] = predictcorrect(x,f,fx,t,B)
+        for i ∈ o+1:size(x)[end] # o+1 changed to o
+            assign!(x,i,predictcorrect(x,f,fx,t,B))
         end
     else # Adaptive Multistep
         x,fx = initsteps(x0,t,tmax,f,M,B)
@@ -237,7 +245,7 @@ function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where 
             predictcorrect!(x,f,fx,t,B)
         end
     end
-    return x
+    return resize(x)
 end
 
 #integrange
@@ -249,7 +257,7 @@ function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where
     if m == 1 # Singlestep
         x = initsteps(x0,t,tmax,M)
         for i ∈ 2:length(x)
-            @inbounds x[i] = explicit(x[i-1],f,t.h,B)
+            assign!(x,i,explicit(extract(x,i-1),f,t.h,B))
         end
     elseif m == 2 # Adaptive Singlestep
         x = initsteps(x0,t,tmax,M)
@@ -259,7 +267,7 @@ function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where
     elseif m == 3 # Multistep
         x,fx = initsteps2(x0,t,tmax,f,M,B)
         for i ∈ (isone(o) ? 2 : o):length(x) # o+1 changed to o
-            @inbounds x[i] = predictcorrect2(x,f,fx,t,B)
+            assign!(x,i,predictcorrect2(x,f,fx,t,B))
         end
     else # Adaptive Multistep
         x,fx = initsteps(x0,t,tmax,f,M,B) # o+1 fix?
@@ -267,7 +275,7 @@ function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where
             predictcorrect!(x,f,fx,t,B)
         end
     end
-    return x
+    return resize(x)
 end
 
 function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
@@ -275,15 +283,27 @@ function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=V
     if m == 0 # Improved Euler, Heun's Method
         x = initsteps(x0,t,tmax,M)
         for i ∈ 2:length(x)
-            @inbounds x[i] = heun(x[i-1],f,t.h)
+            assign!(x,i,heun(extract(x,i-1),f,t.h))
         end
     elseif m == 3 # Multistep
         x,fx = initsteps(x0,t,tmax,f,M,B)
         for i ∈ o+1:length(x)
-            @inbounds x[i] = predictcorrect(x,f,fx,t,B)
+            assign!(x,i,predictcorrect(x,f,fx,t,B))
         end
     end
-    return x
+    return resize(x)
+end
+
+export geosolve, geosolve2
+
+geosolve(Γ,x0,v0,tmax,tol,m,o) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
+function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+    getindex.(odesolve(x->geodesicsystem(x[1],Γ),Chain(x0,v0),tmax,tol,M,B),1)
+end
+
+geosolve2(Γ,g,x0,v0,tmax,tol,m,o) = geosolve2(Γ,g,x0,v0,tmax,tol,Val(m),Val(o))
+function geosolve2(Γ,g,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+    getindex.(odesolve(x->geodesicsystem(x[1],Γ,g),Chain(x0,v0),tmax,tol,M,B),1)
 end
 
 function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
@@ -307,8 +327,8 @@ end
 
 time(x) = x[1]
 
-Base.resize!(x,i,h) = length(x)<i+1 && resize!(x,i+h)
-truncate!(x,i) = length(x)>i+1 && resize!(x,i)
+Base.resize!(x,i,h) = length(x)<i+1 && resize_lastdim!(x,i+h)
+truncate!(x,i) = length(x)>i+1 && resize_lastdim!(x,i)
 
 show_progress(x,t,b) = t.i%75000 == 11 && println(point(x[t.i])," out of ",b)
 
