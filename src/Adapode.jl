@@ -294,16 +294,11 @@ function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=V
     return resize(x)
 end
 
-export geosolve, geosolve2
+export geosolve
 
 geosolve(Γ,x0,v0,tmax,tol,m,o) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
-    getindex.(odesolve(x->geodesicsystem(x[1],Γ),Chain(x0,v0),tmax,tol,M,B),1)
-end
-
-geosolve2(Γ,g,x0,v0,tmax,tol,m,o) = geosolve2(Γ,g,x0,v0,tmax,tol,Val(m),Val(o))
-function geosolve2(Γ,g,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
-    getindex.(odesolve(x->geodesicsystem(x[1],Γ,g),Chain(x0,v0),tmax,tol,M,B),1)
+    getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
 end
 
 function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
