@@ -39,6 +39,51 @@ export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺, ⊕
 include("constants.jl")
 include("element.jl")
 
+abstract type AbstractIntegrator end
+abstract type StepIntegrator <: AbstractIntegrator end
+abstract type AdaptiveIntegrator <: AbstractIntegrator end
+
+struct EulerHeunIntegrator <: StepIntegrator
+    tol::Float64
+end
+
+struct ExplicitIntegrator{o} <: StepIntegrator
+    tol::Float64
+end
+
+struct ExplicitAdaptor{o} <: AdaptiveIntegrator
+    tol::Float64
+end
+
+struct MultistepIntegrator{o} <: StepIntegrator
+    tol::Float64
+end
+
+struct MultistepAdaptor{o} <: AdaptiveIntegrator
+    tol::Float64
+end
+
+AbstractIntegrator(tol=15,int::AbstractIntegrator=ExplicitIntegrator{4}) = int(tol)
+AbstractIntegrator(tol,m,o=4) = AbstractIntegrator(tol,Val(m),Val(o))
+function AbstractIntegrator(tol,M::Val{m},B::Val{o}=Val(4)) where {m,o}
+    int = if m == 0
+        EulerHeunIntegrator(tol)
+    elseif m == 1
+        ExplicitIntegrator{o}(tol)
+    elseif m == 2
+        ExplicitAdaptor{o}(tol)
+    elseif m == 3
+        MultistepIntegrator{o}(tol)
+    elseif m == 4
+        MultistepAdaptor{o}(tol)
+    end
+end
+
+EulerHeunIntegrator(tol::Int) = EulerHeunIntegrator(2.0^-tol)
+for fun ∈ (:ExplicitIntegrator,:ExplicitAdaptor,:MultistepIntegrator,:MultistepAdaptor)
+    @eval $fun{o}(tol::Int) where o = $fun{o}(2.0^-tol)
+end
+
 mutable struct TimeStep{T}
     h::T
     hmin::T
@@ -52,6 +97,8 @@ mutable struct TimeStep{T}
         checkstep!(new{typeof(h)}(h,hmin,hmax,emin,emax,(emin+emax)/2,1,0))
     end
 end
+TimeStep(I::AbstractIntegrator) = TimeStep(I.tol)
+
 function checkstep!(t)
     abs(t.h) < t.hmin && (t.h = copysign(t.hmin,t.h))
     abs(t.h) > t.hmax && (t.h = copysign(t.hmax,t.h))
@@ -133,9 +180,9 @@ initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
 function initsteps(x0::Section,t,tmax,::Val{m}) where m
     tmin,f0 = base(x0),fiber(x0)
     n = Int(round((tmax-tmin)/t.h))+1
-    t = m ∈ (0,1,3) ? (tmin:t.h:tmax) : Vector{typeof(t.h)}(undef,n)
-    m ∉ (0,1,3) && (t[1] = tmin)
-    x = Array{fibertype(fibertype(x0)),ndims(f0)+1}(undef,size(f0)...,m ∈ (0,1,3) ? length(t) : n)
+    t = m ? (tmin:t.h:tmax) : Vector{typeof(t.h)}(undef,n)
+    (!m) && (t[1] = tmin)
+    x = Array{fibertype(fibertype(x0)),ndims(f0)+1}(undef,size(f0)...,m ? length(t) : n)
     assign!(x,1,fiber(f0))
     return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
@@ -216,34 +263,66 @@ end
 init(x0) = 0.0 ↦ x0
 init(x0::Section) = x0
 
-odesolve(f,x0,tmax,tol,m,o) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
+struct InitialCondition{F,X}
+    f::F
+    x0::X
+    tmax::Float64
+end
+
+InitialCondition(f,x0) = InitialCondition(f,x0,2π)
+
+struct InitialValueSetup{F,X,I<:AbstractIntegrator}
+    ic::InitialCondition{F,X}
+    i::I
+end
+
+InitialValueSetup(f,x0,tmax,tol,m,o=4) = InitialValueSetup(f,x0,tmax,tol,Val(m),Val(o))
+function InitialValueSetup(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
+    InitialValueSetup(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
+end
+
+odesolve(ode::InitialValueSetup) = odesolve(ode.ic,ode.i)
+odesolve(f,x0,tmax,tol,m,o=4) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
-    t = TimeStep(2.0^-tol)
-    if m == 0 # Improved Euler, Heun's Method
-        x = initsteps(x0,t,tmax,M)
-        for i ∈ 2:size(x)[end]
-            assign!(x,i,heun(extract(x,i-1),f,t.h))
-        end
-    elseif m == 1 # Singlestep
-        x = initsteps(x0,t,tmax,M)
-        for i ∈ 2:size(x)[end]
-            assign!(x,i,explicit(extract(x,i-1),f,t.h,B))
-        end
-    elseif m == 2 # Adaptive Singlestep
-        x = initsteps(x0,t,tmax,M)
-        while timeloop!(x,t,tmax)
-            explicit!(x,f,t,B)
-        end
-    elseif m == 3 # Multistep
-        x,fx = initsteps(x0,t,tmax,f,M,B)
-        for i ∈ o+1:size(x)[end] # o+1 changed to o
-            assign!(x,i,predictcorrect(x,f,fx,t,B))
-        end
-    else # Adaptive Multistep
-        x,fx = initsteps(x0,t,tmax,f,M,B)
-        while timeloop!(x,t,tmax,B) # o+1 fix??
-            predictcorrect!(x,f,fx,t,B)
-        end
+    odesolve(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
+end
+function odesolve(ic::InitialCondition,I::EulerHeunIntegrator)
+    t = TimeStep(I)
+    x = initsteps(ic.x0,t,ic.tmax,Val(true))
+    for i ∈ 2:size(x)[end]
+        assign!(x,i,heun(extract(x,i-1),ic.f,t.h))
+    end
+    return x
+end
+function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o}) where o
+    t,B = TimeStep(I),Val(o)
+    x = initsteps(ic.x0,t,ic.tmax,Val(true))
+    for i ∈ 2:size(x)[end]
+        assign!(x,i,explicit(extract(x,i-1),ic.f,t.h,B))
+    end
+    return x
+end
+function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
+    t,B = TimeStep(I),Val(o)
+    x = initsteps(ic.x0,t,ic.tmax,Val(false))
+    while timeloop!(x,t,ic.tmax)
+        explicit!(x,ic.f,t,B)
+    end
+    return resize(x)
+end
+function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
+    t,B = TimeStep(I),Val(o)
+    x,fx = initsteps(ic.x0,t,ic.tmax,ic.f,Val(true),B)
+    for i ∈ o+1:size(x)[end] # o+1 changed to o
+        assign!(x,i,predictcorrect(x,ic.f,fx,t,B))
+    end
+    return x
+end
+function odesolve(ic::InitialCondition,I::MultistepAdaptor{o}) where o
+    t,B = TimeStep(I),Val(o)
+    x,fx = initsteps(ic.x0,t,ic.tmax,ic.f,Val(false),B)
+    while timeloop!(x,t,ic.tmax,B) # o+1 fix??
+        predictcorrect!(x,ic.f,fx,t,B)
     end
     return resize(x)
 end
@@ -251,42 +330,32 @@ end
 #integrange
 #integadapt
 
-odesolve2(f,x0,tmax,tol,m,o) = odesolve2(f,x0,tmax,tol,Val(m),Val(o))
+odesolve2(ode::InitialValueSetup) = odesolve2(ode.ic,ode.i)
+odesolve2(f,x0,tmax,tol,m,o=4) = odesolve2(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
-    t = TimeStep(2.0^-tol)
-    if m == 1 # Singlestep
-        x = initsteps(x0,t,tmax,M)
-        for i ∈ 2:length(x)
-            assign!(x,i,explicit(extract(x,i-1),f,t.h,B))
-        end
-    elseif m == 2 # Adaptive Singlestep
-        x = initsteps(x0,t,tmax,M)
-        while timeloop!(x,t,tmax)
-            explicit!(x,f,t,B)
-        end
-    elseif m == 3 # Multistep
-        x,fx = initsteps2(x0,t,tmax,f,M,B)
-        for i ∈ (isone(o) ? 2 : o):length(x) # o+1 changed to o
-            assign!(x,i,predictcorrect2(x,f,fx,t,B))
-        end
-    else # Adaptive Multistep
-        x,fx = initsteps(x0,t,tmax,f,M,B) # o+1 fix?
-        while timeloop!(x,t,tmax,B)
-            predictcorrect!(x,f,fx,t,B)
-        end
+    odesolve2(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
+end
+odesolve2(ic::InitialCondition,I::ExplicitIntegrator) = odesolve(ic,I)
+odesolve2(ic::InitialCondition,I::ExplicitAdaptor) = odesolve(ic,I)
+odesolve2(ic::InitialCondition,I::MultistepAdaptor) = odesolve(ic,I)
+function odesolve2(ic::InitialCondition,I::MultistepIntegrator{o}) where o
+    t,B = TimeStep(I),Val(o)
+    x,fx = initsteps2(ic.x0,t,ic.tmax,ic.f,Val(true),B)
+    for i ∈ (isone(o) ? 2 : o):size(x)[end] # o+1 changed to o
+        assign!(x,i,predictcorrect2(x,ic.f,fx,t,B))
     end
-    return resize(x)
+    return x
 end
 
 function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     x0,t = init(x),TimeStep(2.0^-tol)
     if m == 0 # Improved Euler, Heun's Method
-        x = initsteps(x0,t,tmax,M)
+        x = initsteps(x0,t,tmax,Val(true))
         for i ∈ 2:length(x)
             assign!(x,i,heun(extract(x,i-1),f,t.h))
         end
     elseif m == 3 # Multistep
-        x,fx = initsteps(x0,t,tmax,f,M,B)
+        x,fx = initsteps(x0,t,tmax,f,Val(true),B)
         for i ∈ o+1:length(x)
             assign!(x,i,predictcorrect(x,f,fx,t,B))
         end
@@ -296,7 +365,9 @@ end
 
 export geosolve
 
-geosolve(Γ,x0,v0,tmax,tol,m,o) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
+geosolve(ode::InitialValueSetup) = getindex.(odesolve(ode),1)
+geosolve(ic::InitialCondition,i::AbstractIntegrator) = getindex.(odesolve(ic,i),1)
+geosolve(Γ,x0,v0,tmax,tol,m,o=4) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
 end
