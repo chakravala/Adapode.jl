@@ -12,7 +12,7 @@
 [![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
 
-This Julia project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode) and evolved with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) and [Cartan.jl](https://github.com/chakravala/Cartan.jl).
+This project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode) and evolved with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) and [Cartan.jl](https://github.com/chakravala/Cartan.jl).
 
 ```julia
 using Grassmann, Adapode, Makie
@@ -48,7 +48,7 @@ Partial differential equations can also be assembled with various additional met
 ```julia
 function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     m = volumes(t)
-    b = assemblefunction(t,f,m)
+    b = assembleload(t,f,m)
     A = assemblestiffness(t,c,m)
     R,r = assemblerobin(e,κ,gD,gN)
     return TensorField(t,(A+R)\(b+r))
@@ -64,11 +64,11 @@ function solvetransportdiffusion(tf,eκ,c,δ,gD=0,gN=0)
     R,r = assemblerobin(e,κ,gD,gN)
     return TensorField(t,(A+R-C'+Sd)\r)
 end
-function solvetransport(t,e,c,ϵ=0.1)
+function solvetransport(t,e,c,f=1,ϵ=0.1)
     m = volumes(t)
     g = gradienthat(t,m)
     A = assemblestiffness(t,ϵ,m,g)
-    b = assembleload(t,m)
+    b = assembleload(t,f,m)
     C = assembleconvection(t,c,m,g)
     return TensorField(t,solvedirichlet(A+C,b,e))
 end
@@ -81,7 +81,7 @@ function BackwardEulerHeat1D()
     T = range(0,0.5,length=m+1) # time grid
     ξ = 0.5.-abs.(0.5.-x) # initial condition
     A = assemblestiffness(p(t)) # assemble(p(t),1,2x)
-    M,b = assemblemassfunction(p(t),2x).+assemblerobin(p(e),1e6,0,0)
+    M,b = assemblemassload(p(t),2x).+assemblerobin(p(e),1e6,0,0)
     h = Float64(T.step); LHS = M+h*A # time step
     for l ∈ 1:m
         ξ = LHS\(M*ξ+h*b); l%10==0 && println(l*h)
