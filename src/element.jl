@@ -15,20 +15,24 @@
 export assemble, assembleglobal, assemblestiffness, assembleconvection, assembleSD
 export assemblemass, assemblefunction, assemblemassfunction, assembledivergence
 export assemblemassincidence, asssemblemasstotalnodes, assembletotalnodes
-export assembleelastic, assemblestokes, assemblemaxwell
+export assembleelastic, assemblestokes, assemblemaxwell, assembleDIPG
 export assembleload, assemblemassload, assemblerobin, edges, edgesindices, neighbors
-export solvepoisson, solvetransport, solvetransportdiffusion, solvemaxwell
+export solvepoisson, solvetransport, solvetransportdiffusion, solvemaxwell, adaptpoisson
 export solveelastic, solvenonlinearpoisson, solvebistable, solvebistable_newton
-export solvedirichlet, adaptpoisson, solveheat, solvewave, solvestokes, solvenavierstokes
+export solvedirichlet, solveheat, solvewave, solvestokes, solvenavierstokes
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
-export submesh, detsimplex, iterable, callable, value, edgelengths, laplacian
-export boundary, interior, trilength, trinormals, incidence, degrees
-import Grassmann: norm, column, columns
-using Base.Threads
+export submesh, detsimplex, iterable, callable, value, laplacian
+export interior, trilength, trinormals, incidence, degrees, solvepoissonDIPG
 
+using Base.Threads
+import Grassmann: norm, column, columns
 import Cartan: points, pointset, edges, iterpts, iterable, callable, revrot
 import Cartan: gradienthat, laplacian, gradient, assemblelocal!
+import Cartan: weights, degrees, assembleincidence, incidence
+import Cartan: assembleload, interp, pretni, interior
+import Cartan: facesindices, edgesindices, neighbor, neighbors, centroidvectors
 
+trilength(t::ElementBundle) = trilength.(fiber(curls(t)))
 trilength(rc) = value.(abs.(value(rc)))
 function trinormals(t)
     c = fiber(curls(t))
@@ -49,7 +53,7 @@ function gradientCR(g::Chain{V}) where V
 end
 
 assembleglobal(M,t::SimplexBundle,m=volumes(t),c=1,g=0) = assembleglobal(M,immersion(t),iterable(t,m),iterable(t,c),iterable(t,g))
-function assembleglobal(M,t::SimplexTopology{N},m::AbstractVector,c::AbstractVector,g::AbstractVector) where N
+function assembleglobal(M,t::ImmersedTopology{N},m::AbstractVector,c::AbstractVector,g::AbstractVector) where N
     np,v = totalnodes(t),Val(N)
     A = spzeros(np,np)
     for k ∈ 1:length(t)
@@ -58,14 +62,12 @@ function assembleglobal(M,t::SimplexTopology{N},m::AbstractVector,c::AbstractVec
     return A
 end
 
-import Cartan: weights, degrees, assembleincidence, incidence
-
 assemblemassincidence(t::SimplexBundle,f,m=volumes(t),l=m) = assemblemassincidence(immersion(t),iterpts(t,f),iterable(t,m),iterable(t,l))
-function assemblemassincidence(t::SimplexTopology{N},f::F,m::V,l::T) where {N,F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
+function assemblemassincidence(t::ImmersedTopology{N},f::F,m::V,l::T) where {N,F<:AbstractVector,V<:AbstractVector,T<:AbstractVector}
     np,n = totalnodes(t),Val(N)
     M,b = spzeros(np,np), zeros(np)
     for k ∈ 1:length(t)
-        tk = value(t[k])
+        tk = t[k]
         assemblelocal!(M,mass(nothing,nothing,n),fiber(m)[k],tk)
         b[tk] .+= fiber(f)[tk]*fiber(l)[k]
     end
@@ -74,8 +76,6 @@ end
 
 assemblemassload(t,f,m=volumes(t),l=m) = assemblemassincidence(t,iterpts(t,f)/sdims(t),m,l)
 assemblemassload(tf::TensorField,m=volumes(base(tf)),l=m) = assemblemassload(base(tf),fiber(tf),m,l)
-
-import Cartan: assembleload, interp, pretni
 
 #mass(a,b,::Val{N}) where N = (ones(SMatrix{N,N,Int})+I)/Int(factorial(N+1)/factorial(N-1))
 mass(a,b,::Val{N}) where N = (x=Submanifold(N)(∇);outer(x,x)+I)/Int(factorial(N+1)/factorial(N-1))
@@ -140,6 +140,12 @@ function solvepoisson(t,e,c,f,κ,gD=0,gN=0)
     return TensorField(t,(A+R)\(b+r))
 end
 
+function poisson(t,e,c,a,f)
+    A,M,b = assemble(t,c,a,f)
+    ξ = solvedirichlet(A+M,b,immersion(e))
+    return TensorField(t,ξ)
+end
+
 function solvetransportdiffusion(tf,eκ,c,δ,gD=0,gN=0)
     t,f,e,κ = base(tf),fiber(tf),base(eκ),fiber(eκ)
     m = volumes(t)
@@ -194,14 +200,6 @@ function solvedirichlet(M,b,fixed)
     return ξ
 end
 
-import Cartan: interior
-
-solvehomogenous(e,M,b) = solvedirichlet(M,b,e)
-export solvehomogenous, solveboundary
-const solveboundary = solvedirichlet # deprecate
-const edgelengths = volumes # deprecate
-const boundary = pointset # deprecate
-
 function solveheat(ic,f,κ,T)
     m,h = length(T),step(T)
     out = zeros(length(ic),m)
@@ -253,7 +251,7 @@ function solvestokes(pt,bc,ν=0.1,t2e=edgesindices(pt,base(bc)))
     ξ = solvedirichlet(LHS,zeros(2ne+nt+1),fixed,gvals)
     UV = Chain{Manifold(fibertype(bc))}.(ξ[1:ne],ξ[1+ne:2ne])
     P = ξ[2ne+1:2ne+nt]
-    TensorField(pt,interp(fullimmersion(bc),UV)),TensorField(pt,interp(pt,P))
+    TensorField(pt,interp(fullimmersion(bc),UV)),TensorField(FaceBundle(pt),P)
 end
 
 function solvenavierstokes(pt,pe,inbc,outbc,ν=0.001,T=range(0,1,101))
@@ -303,10 +301,10 @@ function assembleelastic(f,μ,λ)
     for i ∈ 1:length(t) # assembly loop over subelements
         ti,mi = t[i],fiber(m)[i]
         fti = fiber(f)[ti]
-        t1 = 2ti
-        t2 = t1.-1
+        t2 = 2ti
+        t1 = t2.-1
         MK = mass(nothing,nothing,Val(3))*mi
-        assemblelocal!(K,elasticstrain(λ,μ,fiber(g)[i],Val(3)),mi,Values(t1...,t2...))
+        assemblelocal!(K,elasticstrain(λ,μ,fiber(g)[i],Val(3)),mi,vcat(t1,t2))
         assemblelocal!(M,MK,t1)
         assemblelocal!(M,MK,t2)
         F[t1] .= value(MK⋅Chain(getindex.(fti,1)))
@@ -382,10 +380,10 @@ function solvenonlinearpoisson(f,pe,Afcn)
     m = volumes(pt)
     g = gradienthat(pt,m)
     ξ = zeros(nodes(immersion(f)))
-    for k ∈ 1:5 # non-linear loop
+    for k ∈ list(1,5) # non-linear loop
         J,r = assemblejacobianresidue(f,pe,ξ,Afcn,m,g)
         d = J\r
-        ξ = ξ + d # update solution by solving correction
+        ξ += d # update solution by solving correction
         println("|d|=$(norm(d)), |r|=$(norm(r))")
     end
     TensorField(pt,ξ)
@@ -434,7 +432,67 @@ function solvebistable_newton(ic,ϵ=0.01,T=StepRangeLen(0,0.1,101),f=u->u-u^3,df
     TensorField(base(ic)⊕T,ξ)
 end
 
-import Cartan: facesindices, edgesindices, neighbor, neighbors, centroidvectors
+function gradienthat(ip::Simplex) # ip is already inverse of the point Simplex
+    TensorOperator(Chain{Manifold(ip)}(Cartan.affmanifold(2).(value(transpose(ip)))))
+end
+
+function assembleDIPG(pt,nbrs=neighbors(immersion(pt)))
+    nt,np = elements(pt),totalnodes(pt)
+    S = spzeros(np,np) # flux matrix
+    P = spzeros(np,np) # penalty matrix
+    edge2node = Values(Values(2,3),Values(1,3),Values(1,2))
+    cmat = TensorOperator(Chain{Manifold(pt)}(Chain(2,0),Chain(1,1),Chain(0,2)))/2
+    wvec = Values(1,4,1)/6 # Simpson's formula
+    ah = Cartan.affinehull(pt)
+    m = volumes(pt)
+    ip = inv.(ah) # precompute
+    ds,dn = trinormals(pt)
+    val123 = Values(1,2,3)
+    for i ∈ 1:nt
+        xyp = ah[i]
+        ipp = ip[i]
+        gp = gradienthat(ipp) # gradienthat on "plus" element
+        ni = nbrs[i] # neighbors
+        dsi,dni = ds[i],dn[i]
+        for j ∈ val123 # loop over edges
+            n = ni[j] # element neighbor
+            n > i && continue # only assemble once on each edge
+            iszero(n) && (n = i) # boundary?
+            wxlen = wvec*dsi[j] # quadrature weight times edge length
+            dnij = dni[j]
+            exy = TensorOperator(Chain(xyp[edge2node[j]]))⋅cmat # xy coordinates of quadrature points on edge
+            SE = zero(Chain{Submanifold(6),1,Chain{Submanifold(6),1,Float64}})
+            PE = zero(Chain{Submanifold(6),1,Chain{Submanifold(6),1,Float64}})
+            ipm = ip[n]
+            gm = gradienthat(ipm) # gradienthat on "minus" element
+            avgdn = Chain(vcat(value(dnij⋅gp),value(dnij⋅gm))/2) # average
+            for q ∈ list(1,length(wvec)) # quadrature loop on edge
+                jump = Chain(vcat(value(ipp⋅exy[q]),-value(ipm⋅exy[q]))) # jump
+                PE += outer(jump*wvec[q],jump) # penalty divided by local length scale h_e
+                SE += outer(jump*wxlen[q],avgdn)
+            end
+            if n==i # boundary
+                dofs = val123.+3(i-1)
+                assemblelocal!(P,PE,dofs)
+                assemblelocal!(S,2SE,dofs) # no average on boundary
+            else
+                dofs = vcat(val123.+3(i-1),val123.+3(n-1))
+                assemblelocal!(P,PE,dofs)
+                assemblelocal!(S,SE,dofs)
+            end
+        end
+    end
+    return P,S
+end
+
+function solvepoissonDIPG(f,α,β,c=1) # α = SIPG, β = penalty
+    pt = base(f)
+    m = volumes(pt)
+    b = assembleload(pt,f,m)
+    A = assemblestiffness(pt,c,m)
+    P,S = assembleDIPG(pt)
+    TensorField(pt,(A-S+α*S'+β*P)\b)
+end
 
 Eν2Lame(E,ν) = E/(2(1+ν)),E*ν/((1+ν)*(1-2ν))
 
@@ -521,5 +579,171 @@ function jumps(t,c,a,f,u,m=volumes(t),g=gradienthat(t,m))
         throw(error("jumps on Manifold{$N} not defined"))
     end
     return TensorField(FaceBundle(t),η)
+end
+
+elementresiduals(f::TensorField{B,F,N,<:SimplexBundle} where {B,F,N}) = elementresiduals(means(f))
+function elementresiduals(f::TensorField{B,F,N,<:FaceBundle} where {B,F,N})
+    pt = base(f)
+    TensorField(pt,maximum.(trilength(pt)).*sqrt.(fiber(volumes(pt)).*Real.(abs.(fiber(f)))))
+end
+
+function edgeresiduals(UV,E=1,ν=0.3,nbrs=neighbors(immersion(pt)))
+    pt = base(UV)
+    nt = elements(pt)
+    rK = zeros(nt) # allocate edge residuals
+    μ,λ = Eν2Lame(E,ν)
+    m = volumes(pt)
+    ds,dn = trinormals(pt)
+    #dudx = fiber(gradient(UV))
+    dudx1 = fiber(gradient_2(getindex.(UV,1)))
+    dudx2 = fiber(gradient_2(getindex.(UV,2)))
+    dudx = TensorOperator.(Chain{Manifold(dudx1)}.(dudx1,dudx2))
+    for i ∈ OneTo(nt)
+        r = 0 # sum of edge residuals sqrt(h)|0.5[n.sigma]|_dK
+        dsi,dni,ni,dudxi = ds[i],dn[i],nbrs[i],dudx[i]
+        h = maximum(dsi)
+        for j ∈ Values(1,2,3) # loop over element edges
+            n = ni[j] # element neighbour
+            iszero(n) && continue # no neighbour, don't compute on boundary
+            # iszero(n) ↦ should compute sqrt(h)|g_N-n.sigma|_dK
+            Sp = stress(μ,λ,dudxi) # stress on element i
+            Sm = stress(μ,λ,dudx[n]) # stress on neighbour
+            jump = ((Sm-Sp)/2)⋅dni[j] # stress jump
+            r += Real(abs(jump))*dsi[j]
+        end
+        rK[i] = sqrt(h)*sqrt(r)
+    end
+    return TensorField(FaceBundle(pt),rK)
+end
+
+function stress(μ,λ,dudx)
+    divu = sum(value(diag(dudx)))
+    ϵ = (dudx+transpose(dudx))/2
+    (2μ)*ϵ + (λ*divu)*I
+end
+
+export shapeP1, shapeP2, isoparametric, assemblemassP1, assemblestiffnessP2, LagrangeP2
+
+shapeP1(rs::Values) = shapeP1(rs...)
+function shapeP1(r,s)
+    S = Values(1-r-s,r,s)
+    dSdr = Values(-1,1,0)
+    dSds = Values(-1,0,1)
+    return S,dSdr,dSds
+end
+function shapeP1(r,s,t)
+    S = Values(1-r-s-t,r,s,t)
+    dSdr = Values(-1,1,0,0)
+    dSds = Values(-1,0,1,0)
+    dSdt = Values(-1,0,0,1)
+    return S,dSdr,dSds,dSdt
+end
+
+shapeP2(rs::Values) = shapeP2(rs...)
+function shapeP2(r,s)
+    S = Values(1-3r-3s+2r*r+4r*s+2s*s,
+               2r*r-r,
+               2s*s-s,
+               4r*s,
+               4s-4r*s-4s*s,
+               4r-4r*r-4r*s)
+    dSdr = Values(-3+4r+4s,4r-1,0,4s,-4s,4-8r-4s)
+    dSds = Values(-3+4r+4s,0,4s-1,4r,4-4r-8s,-4r)
+    return S,dSdr,dSds
+end
+
+isoparametric(xy,rs,shapefcn) = isoparametric(getindex.(xy,2),getindex.(xy,3),rs,shapefcn)
+function isoparametric(x,y,rs,shapefcn)
+    S,dSdr,dSds = shapefcn(rs)
+    j11 = dSdr⋅x; j12 = dSdr⋅y
+    j21 = dSds⋅x; j22 = dSds⋅y
+    detJ = j11*j22-j12*j21
+    dSdx = ( j22*dSdr-j12*dSds)/detJ
+    dSdy = (-j21*dSdr+j11*dSds)/detJ
+    return Chain(S),Chain(dSdx),Chain(dSdy),detJ
+end
+
+function assemblemassP1(pt)
+    qwgts,rspts = Adapode.Gauss[2] # quadrature rule
+    np = nodes(pt) # number of nodes
+    M = spzeros(np,np) # allocate mass matrix
+    for i ∈ 1:elements(pt) # loop over elements
+        ti = immersion(pt)[i] # node numbers
+        xy = fullpoints(pt)[ti] #  node coordinates
+        MK = zero(Chain{Submanifold(3),1,Chain{Submanifold(3),1,Float64}})
+        for q=1:length(qwgts) # quadrature loop
+            rs = rspts[q] # quadrature coordinate
+            S,dSdx,dSdy,detJ = isoparametric(xy,rs,shapeP1) # map
+            wxarea = qwgts[q]*detJ/2 # weight times area det(J)
+            MK += outer(S,S*wxarea) # compute and add integrand to MK
+        end
+        assemblelocal!(M,MK,ti)
+    end
+    return M#A,M,F
+end
+
+function assemblestiffnessP2(pt)#,force)
+    qwgts,rspts = Adapode.Gauss[4] # quadrature rule
+    np = nodes(pt) # number of nodes
+    A = spzeros(np,np) # allocate stiffness matrix
+    for i ∈ 1:elements(pt) # loop over elements
+        ti = immersion(pt)[i] # node numbers
+        xy = fullpoints(pt)[ti] #  node coordinates
+        AK = zero(Chain{Submanifold(6),1,Chain{Submanifold(6),1,Float64}})
+        for q=1:length(qwgts) # quadrature loop
+            rs = rspts[q] # quadrature coordinate
+            S,dSdx,dSdy,detJ = isoparametric(xy,rs,shapeP2) # map
+            wxarea = qwgts[q]*detJ/2 # weight times area det(J)
+            AK += (outer(dSdx,dSdx*wxarea)+outer(dSdy,dSdy*wxarea)) # element stiffness
+        end
+        assemblelocal!(A,AK,ti)
+    end
+    return A#,M,F
+end
+
+function LagrangeP2(t::SimplexTopology)
+    ei = edgesindices(t)
+    ed = topology(ei).+Ref(Values(nodes(t),nodes(t),nodes(t))) # get element edges as nodes
+    n = nodes(t)+nodes(ei)
+    SimplexTopology(0,vcat.(topology(pt),topology(ed)),Base.OneTo(n),n)
+end
+function LagrangeP2(pt::SimplexBundle,ei=LagrangeP2(immersion(pt)))
+    ed = topology(ei) # get element edges as nodes
+    resize!(fullcoordinates(pt),nodes(ei))
+    i,j,k = columns(immersion(pt))
+    p = if isinduced(pt)
+        fullpoints(pt)
+    else
+        fullcoordinates(pt)
+    end
+    p[getindex.(ed,4)] = (p[j]+p[k])/2 # edge node coordinates
+    p[getindex.(ed,5)] = (p[i]+p[k])/2
+    p[getindex.(ed,6)] = (p[i]+p[j])/2
+    return fullcoordinates(pt)(ei)
+end
+
+shapemultilinear(rs::Values...) = shapemultilinear(rs...)
+function shapemultilinear(r,s)
+    S = Values((1-r)*(1-s),
+               (1+r)*(1-s),
+               (1+r)*(1+s),
+               (1-r)*(1+s))/4
+    dSdr = Values(-1+s,+1-s,1+s,-1-s)
+    dSds = Values(-1+r,-1-r,1+r,+1-r)
+    return S,dSdr,dSds
+end
+function shapemultilinear(r,s,t)
+    S = Values((1-r)*(1-s)*(1-t),
+               (1+r)*(1-s)*(1-t),
+               (1+r)*(1+s)*(1-t),
+               (1-r)*(1+s)*(1-t),
+               (1-r)*(1-s)*(1+t),
+               (1+r)*(1-s)*(1+t),
+               (1+r)*(1+s)*(1+t),
+               (1-r)*(1+s)*(1+t))/8
+    dSdr = Values(-(1-s)*(1-t),(1-s)*(1-t),(1+s)*(1-t),-(1+s)*(1-t),-(1-s)*(1+t),(1-s)*(1+t),(1+s)*(1+t),-(1+s)*(1+t))
+    dSds = Values(-(1-r)*(1-t),-(1+r)*(1-t),(1+r)*(1-t),(1-r)*(1-t),-(1-r)*(1+t),-(1+r)*(1+t),(1+r)*(1+t),(1-r)*(1+t))
+    dSdt = Values(-(1-r)*(1-s),-(1+r)*(1-s),-(1+r)*(1+s),-(1-r)*(1+s),(1-r)*(1-s),(1+r)*(1-s),(1+r)*(1+s),(1-r)*(1+s))
+    return S,dSdr,dSds,dSdt
 end
 
