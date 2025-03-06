@@ -30,7 +30,7 @@ import Cartan: points, pointset, edges, iterpts, iterable, callable, revrot
 import Cartan: gradienthat, laplacian, gradient, assemblelocal!
 import Cartan: weights, degrees, assembleincidence, incidence
 import Cartan: assembleload, interp, pretni, interior
-import Cartan: facesindices, edgesindices, neighbor, neighbors, centroidvectors
+import Cartan: facesindices, edgesindices, neighbor, neighbors
 
 trilength(t::ElementBundle) = trilength.(fiber(curls(t)))
 trilength(rc) = value.(abs.(value(rc)))
@@ -343,7 +343,7 @@ function solvemaxwell(κ,bc,μ=1,fhat=Chain{Cartan.varmanifold(3)(2,3)}(0,0))
     signs = facetsigns(t)
     A,b = assemblemaxwell(p,e,t,κ,μ,fhat,t2e,signs)
     ξ = solvedirichlet(A,complex.(b),subelements(bc),fiber(bc))
-    RI = TensorField(pt,interp(t,nedelecmean(pt,t2e,signs,ξ)))
+    RI = interpnedelec(pt,ξ,t2e,signs)
     TensorField(pt,map.(real,fiber(RI))),TensorField(pt,map.(imag,fiber(RI)))
 end
 
@@ -448,7 +448,7 @@ function assembleDIPG(pt,nbrs=neighbors(immersion(pt)))
     ip = inv.(ah) # precompute
     ds,dn = trinormals(pt)
     val123 = Values(1,2,3)
-    for i ∈ 1:nt
+    for i ∈ OneTo(nt)
         xyp = ah[i]
         ipp = ip[i]
         gp = gradienthat(ipp) # gradienthat on "plus" element
@@ -545,12 +545,28 @@ function basisnedelec(p)
         Chain{V,1}(1-p[2],p[1]))
 end
 
+function interpnedelec(pt,ξ,t2e=edgesindices(pt),signs=facetsigns(pt))
+    TensorField(pt,interp(immersion(pt),nedelecmean(pt,t2e,signs,fiber(ξ))))
+end
 function nedelecmean(t,t2e,signs,u)
     base = fiber(Grassmann.vectors(t))
     B = revrot.(base,revrot)./Real.(.∧(base))
     N = basisnedelec(Values(1,1)/3)
     x,y,z = columns(immersion(t2e)); X,Y,Z = columns(signs,1,3)
     (u[x].*X).*(B.⋅N[1]) + (u[y].*Y).*(B.⋅N[2]) + (u[z].*Z).*(B.⋅N[3])
+end
+
+function centroidvectors(t,m=means(t))
+    p,nt = fullpoints(t),elements(t)
+    V = Manifold(p)(2,3)
+    c = Vector{Values{3,Chain{V,1,Float64,2}}}(undef,nt)
+    δ = Vector{Values{3,Float64}}(undef,nt)
+    ah = affinehull(t)
+    for k ∈ 1:nt
+        c[k] = V.(fiber(m)[k].-ah[k])
+        δ[k] = value.(abs.(c[k]))
+    end
+    return c,δ
 end
 
 function jumps(t,c,a,f,u,m=volumes(t),g=gradienthat(t,m))
@@ -622,79 +638,112 @@ function stress(μ,λ,dudx)
     (2μ)*ϵ + (λ*divu)*I
 end
 
-export shapeP1, shapeP2, isoparametric, assemblemassP1, assemblestiffnessP2, LagrangeP2
+export shapeP1, shapeP2, gradientP1, gradientP2
 
 shapeP1(rs::Values) = shapeP1(rs...)
-function shapeP1(r,s)
-    S = Values(1-r-s,r,s)
-    dSdr = Values(-1,1,0)
-    dSds = Values(-1,0,1)
-    return S,dSdr,dSds
+shapeP1(r) = Chain(1-r,r)
+shapeP1(r,s) = Chain(1-r-s,r,s)
+shapeP1(r,s,t) = Chain(1-r-s-t,r,s,t)
+
+gradientP1(rs::Values) = gradientP1(rs...)
+function gradientP1(r)
+    V = Cartan.affmanifold(1)
+    TensorOperator(Chain(Chain{V}(-1),
+        Chain{V}(1)))
 end
-function shapeP1(r,s,t)
-    S = Values(1-r-s-t,r,s,t)
-    dSdr = Values(-1,1,0,0)
-    dSds = Values(-1,0,1,0)
-    dSdt = Values(-1,0,0,1)
-    return S,dSdr,dSds,dSdt
+function gradientP1(r,s)
+    V = Cartan.affmanifold(2)
+    TensorOperator(Chain(Chain{V}(-1,-1),
+        Chain{V}(1,0),
+        Chain{V}(0,1)))
+end
+function gradientP1(r,s,t)
+    V = Cartan.affmanifold(3)
+    TensorOperator(Chain(Chain{V}(-1,-1,-1),
+        Chain{V}(1,0,0),
+        Chain{V}(0,1,0),
+        Chain{V}(0,0,1)))
 end
 
 shapeP2(rs::Values) = shapeP2(rs...)
 function shapeP2(r,s)
-    S = Values(1-3r-3s+2r*r+4r*s+2s*s,
-               2r*r-r,
-               2s*s-s,
-               4r*s,
-               4s-4r*s-4s*s,
-               4r-4r*r-4r*s)
-    dSdr = Values(-3+4r+4s,4r-1,0,4s,-4s,4-8r-4s)
-    dSds = Values(-3+4r+4s,0,4s-1,4r,4-4r-8s,-4r)
-    return S,dSdr,dSds
+    Chain(1-3r-3s+2r*r+4r*s+2s*s,
+        2r*r-r,
+        2s*s-s,
+        4r*s,
+        4s-4r*s-4s*s,
+        4r-4r*r-4r*s)
 end
 
-isoparametric(xy,rs,shapefcn) = isoparametric(getindex.(xy,2),getindex.(xy,3),rs,shapefcn)
-function isoparametric(x,y,rs,shapefcn)
-    S,dSdr,dSds = shapefcn(rs)
-    j11 = dSdr⋅x; j12 = dSdr⋅y
-    j21 = dSds⋅x; j22 = dSds⋅y
-    detJ = j11*j22-j12*j21
-    dSdx = ( j22*dSdr-j12*dSds)/detJ
-    dSdy = (-j21*dSdr+j11*dSds)/detJ
-    return Chain(S),Chain(dSdx),Chain(dSdy),detJ
+gradientP2(rs::Values) = gradientP2(rs...)
+function gradientP2(r,s)
+    V = Cartan.affmanifold(2)
+    TensorOperator(Chain(Chain{V}(-3+4r+4s,-3+4r+4s),
+        Chain{V}(4r-1,0),
+        Chain{V}(0,4s-1),
+        Chain{V}(4s,4r),
+        Chain{V}(-4s,4-4r-8s),
+        Chain{V}(4-8r-4s,-4r)))
 end
 
-function assemblemassP1(pt)
-    qwgts,rspts = Adapode.Gauss[2] # quadrature rule
+const GaussShape = Values(shapeP1.(Gauss[2][2]),shapeP2.(Gauss[4][2]))
+const GaussGradient = Values(gradientP1.(Gauss[2][2]),gradientP2.(Gauss[4][2]))
+
+function isoparametric(xy,dS)
+    iJ,detJ = invdet(dS⋅transpose(xy))
+    return iJ⋅dS,Real(detJ)
+end
+
+volumesPN(xy::Vector,dS::Values) = volumePN.(xy,Ref(dS))
+volumesPN(xy::Vector,dS::TensorOperator) = volumePN.(xy,dS)
+volumePN(xy::TensorOperator,dS::Values) = volumePN.(xy,dS)
+volumePN(xy::TensorOperator,dS) = Real(det(dS⋅transpose(xy)))
+
+export isoparametric, volumePN, volumesPN, assemblemassPN, assemblestiffnessPN
+
+assemblemassP1(pt) = assemblemassPN(pt,Val(1))
+assemblemassP2(pt) = assemblemassPN(pt,Val(2))
+assemblemassPN(pt,N::Int) = assemblemassPN(pt,Val(N))
+function assemblemassPN(pt,::Val{N}) where N
+    qwgts = Adapode.Gauss[2N][1]/2 # quadrature rule
+    S = Adapode.GaussShape[N] # quadrature shape
+    dSrs = Adapode.GaussGradient[N] # quadrature gradient
+    V,iter = Cartan.affmanifold(2),list(1,length(qwgts))
+    dim = 3N
     np = nodes(pt) # number of nodes
     M = spzeros(np,np) # allocate mass matrix
     for i ∈ 1:elements(pt) # loop over elements
         ti = immersion(pt)[i] # node numbers
-        xy = fullpoints(pt)[ti] #  node coordinates
-        MK = zero(Chain{Submanifold(3),1,Chain{Submanifold(3),1,Float64}})
-        for q=1:length(qwgts) # quadrature loop
-            rs = rspts[q] # quadrature coordinate
-            S,dSdx,dSdy,detJ = isoparametric(xy,rs,shapeP1) # map
-            wxarea = qwgts[q]*detJ/2 # weight times area det(J)
-            MK += outer(S,S*wxarea) # compute and add integrand to MK
+        xy = TensorOperator(Chain(V.(fullpoints(pt)[ti]))) #  node coordinates
+        MK = zero(Chain{Submanifold(dim),1,Chain{Submanifold(dim),1,Float64}})
+        for q ∈ iter # quadrature loop
+            detJ = volumePN(xy,dSrs[q])
+            wxarea = qwgts[q]*detJ # weight times area det(J), pre-divided by 2
+            MK += outer(S[q],S[q]*wxarea) # compute and add integrand to MK
         end
         assemblelocal!(M,MK,ti)
     end
     return M#A,M,F
 end
 
-function assemblestiffnessP2(pt)#,force)
-    qwgts,rspts = Adapode.Gauss[4] # quadrature rule
+assemblestiffnessP1(pt) = assemblestiffnessPN(pt,Val(1))
+assemblestiffnessP2(pt) = assemblestiffnessPN(pt,Val(2))
+assemblestiffnessPN(pt,N::Int) = assemblestiffnessPN(pt,Val(N))
+function assemblestiffnessPN(pt,::Val{N}) where N #,force)
+    qwgts = Adapode.Gauss[2N][1]/2 # quadrature rule
+    dSrs = Adapode.GaussGradient[N] # quadrature gradient
+    V,iter = Cartan.affmanifold(2),list(1,length(qwgts))
+    dim,vdim = 3N,Val(3N)
     np = nodes(pt) # number of nodes
     A = spzeros(np,np) # allocate stiffness matrix
     for i ∈ 1:elements(pt) # loop over elements
         ti = immersion(pt)[i] # node numbers
-        xy = fullpoints(pt)[ti] #  node coordinates
-        AK = zero(Chain{Submanifold(6),1,Chain{Submanifold(6),1,Float64}})
-        for q=1:length(qwgts) # quadrature loop
-            rs = rspts[q] # quadrature coordinate
-            S,dSdx,dSdy,detJ = isoparametric(xy,rs,shapeP2) # map
-            wxarea = qwgts[q]*detJ/2 # weight times area det(J)
-            AK += (outer(dSdx,dSdx*wxarea)+outer(dSdy,dSdy*wxarea)) # element stiffness
+        xy = TensorOperator(Chain(V.(fullpoints(pt)[ti]))) #  node coordinates
+        AK = zero(Chain{Submanifold(dim),1,Chain{Submanifold(dim),1,Float64}})
+        for q ∈ iter # quadrature loop
+            dSxy,detJ = isoparametric(xy,dSrs[q]) # quadrature gradient map
+            wxarea = qwgts[q]*detJ # weight times area det(J), pre-divided by 2
+            AK += stiffness(wxarea,dSxy,vdim) # element stiffness, wxarea*c, c=1
         end
         assemblelocal!(A,AK,ti)
     end
@@ -705,45 +754,60 @@ function LagrangeP2(t::SimplexTopology)
     ei = edgesindices(t)
     ed = topology(ei).+Ref(Values(nodes(t),nodes(t),nodes(t))) # get element edges as nodes
     n = nodes(t)+nodes(ei)
-    SimplexTopology(0,vcat.(topology(pt),topology(ed)),Base.OneTo(n),n)
-end
-function LagrangeP2(pt::SimplexBundle,ei=LagrangeP2(immersion(pt)))
-    ed = topology(ei) # get element edges as nodes
-    resize!(fullcoordinates(pt),nodes(ei))
-    i,j,k = columns(immersion(pt))
-    p = if isinduced(pt)
-        fullpoints(pt)
-    else
-        fullcoordinates(pt)
-    end
-    p[getindex.(ed,4)] = (p[j]+p[k])/2 # edge node coordinates
-    p[getindex.(ed,5)] = (p[i]+p[k])/2
-    p[getindex.(ed,6)] = (p[i]+p[j])/2
-    return fullcoordinates(pt)(ei)
+    SimplexTopology(0,vcat.(topology(t),topology(ed)),OneTo(n),n)
 end
 
 shapemultilinear(rs::Values...) = shapemultilinear(rs...)
+function shapemultilinear(r)
+    Values(
+        1-r,
+        1+r)/2
+end
 function shapemultilinear(r,s)
-    S = Values((1-r)*(1-s),
-               (1+r)*(1-s),
-               (1+r)*(1+s),
-               (1-r)*(1+s))/4
-    dSdr = Values(-1+s,+1-s,1+s,-1-s)
-    dSds = Values(-1+r,-1-r,1+r,+1-r)
-    return S,dSdr,dSds
+    Values(
+        (1-r)*(1-s),
+        (1+r)*(1-s),
+        (1+r)*(1+s),
+        (1-r)*(1+s))/4
 end
 function shapemultilinear(r,s,t)
-    S = Values((1-r)*(1-s)*(1-t),
-               (1+r)*(1-s)*(1-t),
-               (1+r)*(1+s)*(1-t),
-               (1-r)*(1+s)*(1-t),
-               (1-r)*(1-s)*(1+t),
-               (1+r)*(1-s)*(1+t),
-               (1+r)*(1+s)*(1+t),
-               (1-r)*(1+s)*(1+t))/8
-    dSdr = Values(-(1-s)*(1-t),(1-s)*(1-t),(1+s)*(1-t),-(1+s)*(1-t),-(1-s)*(1+t),(1-s)*(1+t),(1+s)*(1+t),-(1+s)*(1+t))
-    dSds = Values(-(1-r)*(1-t),-(1+r)*(1-t),(1+r)*(1-t),(1-r)*(1-t),-(1-r)*(1+t),-(1+r)*(1+t),(1+r)*(1+t),(1-r)*(1+t))
-    dSdt = Values(-(1-r)*(1-s),-(1+r)*(1-s),-(1+r)*(1+s),-(1-r)*(1+s),(1-r)*(1-s),(1+r)*(1-s),(1+r)*(1+s),(1-r)*(1+s))
-    return S,dSdr,dSds,dSdt
+    Values(
+        (1-r)*(1-s)*(1-t),
+        (1+r)*(1-s)*(1-t),
+        (1+r)*(1+s)*(1-t),
+        (1-r)*(1+s)*(1-t),
+        (1-r)*(1-s)*(1+t),
+        (1+r)*(1-s)*(1+t),
+        (1+r)*(1+s)*(1+t),
+        (1-r)*(1+s)*(1+t))/8
 end
+
+gradientmultilinear(rs::Values...) = gradientmultilinear(rs...)
+function gradientmultilinear(r)
+    V = Cartan.affmanifold(1)
+    Values(
+        Chain{V}(-1),
+        Chain{V}(+1))
+end
+function gradientmultilinear(r,s)
+    V = Cartan.affmanifold(2)
+    Values(
+        Chain{V}(-1+s,-1+r),
+        Chain{V}(+1-s,-1-r),
+        Chain{V}(1+s,1+r),
+        Chain{V}(-1-s,+1-r))
+end
+function gradientmultilinear(r,s,t)
+    V = Cartan.affmanifold(3)
+    Values(
+        Chain{V}(-(1-s)*(1-t),-(1-r)*(1-t),-(1-r)*(1-s)),
+        Chain{V}((1-s)*(1-t),-(1+r)*(1-t),-(1+r)*(1-s)),
+        Chain{V}((1+s)*(1-t),(1+r)*(1-t),-(1+r)*(1+s)),
+        Chain{V}(-(1+s)*(1-t),(1-r)*(1-t),-(1-r)*(1+s)),
+        Chain{V}(-(1-s)*(1+t),-(1-r)*(1+t),(1-r)*(1-s)),
+        Chain{V}((1-s)*(1+t),-(1+r)*(1+t),(1+r)*(1-s)),
+        Chain{V}((1+s)*(1+t),(1+r)*(1+t),(1+r)*(1+s)),
+        Chain{V}(-(1+s)*(1+t),(1-r)*(1+t),(1-r)*(1+s)))
+end
+
 

@@ -22,7 +22,7 @@ using SparseArrays, LinearAlgebra, Grassmann, Cartan, Requires
 import Grassmann: value, vector, valuetype, tangent, list
 import Grassmann: Values, Variables, FixedVector
 import Grassmann: Scalar, GradedVector, Bivector, Trivector
-import Base: @pure
+import Base: @pure, OneTo
 import Cartan: resize, resize_lastdim!, extract, assign!
 
 export Values, odesolve, odesolve2
