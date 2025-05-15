@@ -23,7 +23,7 @@ import Grassmann: value, vector, valuetype, tangent, list
 import Grassmann: Values, Variables, FixedVector
 import Grassmann: Scalar, GradedVector, Bivector, Trivector
 import Base: @pure, OneTo
-import Cartan: resize, resize_lastdim!, extract, assign!
+import Cartan: resize, resize_lastdim!, extract, assign!, geodesic
 
 export Values, odesolve, odesolve2
 export initmesh, pdegrad
@@ -38,6 +38,10 @@ export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺, ⊕
 
 include("constants.jl")
 include("element.jl")
+
+export AbstractIntegrator, StepIntegrator, AdaptiveIntegrator
+export EulerHeunIntegrator, ExplicitIntegrator, ExplicitAdaptor
+export MultistepIntegrator, MultistepAdaptor
 
 abstract type AbstractIntegrator end
 abstract type StepIntegrator <: AbstractIntegrator end
@@ -263,6 +267,8 @@ end
 init(x0) = 0.0 ↦ x0
 init(x0::Section) = x0
 
+export InitialCondition, InitialValueSetup
+
 struct InitialCondition{F,X}
     f::F
     x0::X
@@ -363,7 +369,13 @@ function integrate(f::TensorField,x,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=V
     return resize(x)
 end
 
-export geosolve
+export geosolve, geodesic, GeodesicCondition, Geodesic
+
+geodesic(Γ,x0v0) = InitialCondition(geodesic(Γ),x0v0)
+geodesic(Γ,x0v0,tmax::AbstractReal) = InitialCondition(geodesic(Γ),x0v0,tmax)
+geodesic(Γ,x0,v0) = GeodesicCondition(Γ,x0,v0,2π)
+geodesic(Γ,x0,v0,tmax::AbstractReal) = InitialCondition(geodesic(Γ),Chain(x0,v0),tmax)
+const Geodesic,GeodesicCondition = geodesic,geodesic,geodesic
 
 geosolve(ode::InitialValueSetup) = getindex.(odesolve(ode),1)
 geosolve(ic::InitialCondition,i::AbstractIntegrator) = getindex.(odesolve(ic,i),1)
