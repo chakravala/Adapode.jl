@@ -7,21 +7,22 @@
 *Adaptive P/ODE numerics with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) element TensorField assembly*
 
 [![DOI](https://zenodo.org/badge/223493781.svg)](https://zenodo.org/badge/latestdoi/223493781)
-[![Docs Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://grassmann.crucialflow.com/stable)
-[![Docs Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://grassmann.crucialflow.com/dev)
+[![Docs Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cartan.crucialflow.com)
+[![PDF 2025](https://img.shields.io/badge/PDF-2025-blue.svg)](https://www.dropbox.com/sh/tphh6anw0qwija4/AAACiaXig5djrLVAKLPFmGV-a/Geometric-Algebra?preview=grassmann-cartan-2025.pdf)
 [![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
 
 This project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode) and evolved with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) and [Cartan.jl](https://github.com/chakravala/Cartan.jl).
 
 ```julia
-using Grassmann, Adapode, Makie
-x0 = Chain(10.0,10.0,10.0)
+using Grassmann, Cartan, Adapode, Makie # GLMakie
 Lorenz(σ,r,b) = x -> Chain(
 	σ*(x[2]-x[1]),
 	x[1]*(r-x[3])-x[2],
 	x[1]*x[2]-b*x[3])
-lines(odesolve(Lorenz(10.0,28.0,8/3),x0))
+fn,x0 = Lorenz(10.0,28.0,8/3),Chain(10.0,10.0,10.0)
+ic = InitialCondition(fn,x0,2pi) # tmax = 2pi
+lines(odesolve(ic,MultistepIntegrator{4}(2^-15)))
 ```
 Supported ODE solvers include:
 explicit Euler,

@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Reed"
+  given-names: "Michael"
+  orcid: "https://orcid.org/0000-0002-8006-7816"
+title: "Adapode.jl"
+version: 0.3.7
+doi: 10.5281/zenodo.15423237
+date-released: 2025-05-15
+url: "https://github.com/chakravala/Adapode.jl"
+preferred-citation:
+  type: article
+  authors:
+  - family-names: "Reed"
+    given-names: "Michael"
+    orcid: "https://orcid.org/0000-0002-8006-7816"
+  doi: "10.5281/zenodo.15527250"
+  journal: "Crucial Flow Research"
+  month: 1
+  start: 1 # First page number
+  end: 42 # Last page number
+  title: "Differential geometric algebra: compute using Grassmann.jl, Cartan.jl"
+  issue: 1
+  volume: 1
+  year: 2025
