@@ -41,11 +41,13 @@ include("element.jl")
 
 export AbstractIntegrator, StepIntegrator, AdaptiveIntegrator
 export EulerHeunIntegrator, ExplicitIntegrator, ExplicitAdaptor
-export MultistepIntegrator, MultistepAdaptor
+export MultistepIntegrator, MultistepAdaptor, integrator
 
 abstract type AbstractIntegrator end
 abstract type StepIntegrator <: AbstractIntegrator end
 abstract type AdaptiveIntegrator <: AbstractIntegrator end
+
+const integrator = AbstractIntegrator
 
 struct EulerHeunIntegrator <: StepIntegrator
     tol::Float64
@@ -294,9 +296,11 @@ end
 init(x0) = 0.0 ↦ x0
 init(x0::Section) = x0
 
-export Flow, FlowIntegral, InitialCondition, integrator
+export LieGroup, Flow, FlowIntegral, InitialCondition
 
-struct Flow{F}
+abstract type LieGroup{F} end
+
+struct Flow{F} <: LieGroup{F}
     f::F
     t::Float64
 end
@@ -305,46 +309,50 @@ Flow(f::Flow) = f
 Flow(f) = Flow(f,2π)
 system(Φ::Flow) = Φ.f
 duration(Φ::Flow) = Φ.t
+integrator(::Flow) = ExplicitIntegrator{4}(2^-11,0)
+Base.exp(X::TensorField{B,<:Chain{V,1}} where {B,V}) = Flow(X,1.0)
 
-(Φ::Flow)(x0,i=ExplicitIntegrator{4}(2^-15,0)) = odesolve(InitialCondition(Φ,x0),i)
-(Φ::Flow)(x0::LocalTensor,i=ExplicitIntegrator{4}(2^-15,0)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
+(Φ::Flow)(x0,i=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
+(Φ::Flow)(x0::LocalTensor,i=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
 
-function (Φ::Flow)(x0::TensorField,i=ExplicitIntegrator{4}(2^-11,0))
+function (Φ::Flow)(x0::TensorField,i=integrator(Φ))
     ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
     odesolve(InitialCondition(ϕ,x0),i)
 end
 
-struct FlowIntegral{F,I<:AbstractIntegrator}
+struct FlowIntegral{F,I<:AbstractIntegrator} <: LieGroup{F}
     Φ::Flow{F}
     i::I
-    FlowIntegral(Φ::Flow{F},i::I=ExplicitIntegrator{4}(2^-11)) where {F,I<:AbstractIntegrator} = new{F,I}(Φ,i)
+    FlowIntegral(Φ::Flow{F},i::I=integrator(Φ)) where {F,I<:AbstractIntegrator} = new{F,I}(Φ,i)
 end
 
-FlowIntegral(f,tmax,i=ExplicitIntegrator{4}(2^-11)) = FlowIntegral(Flow(f,tmax))
+FlowIntegral(f,tmax,i=ExplicitIntegrator{4}(2^-11)) = FlowIntegral(Flow(f,tmax),i)
 FlowIntegral(f) = FlowIntegral(f,2π)
 
 Flow(Φ::FlowIntegral) = Φ.Φ
-system(Φ::FlowIntegral) = system(Φ.Φ)
-duration(Φ::FlowIntegral) = duration(Φ.Φ)
+system(Φ::FlowIntegral) = system(Flow(Φ))
+duration(Φ::FlowIntegral) = duration(Flow(Φ))
 integrator(Φ::FlowIntegral) = Φ.i
 
 (Φ::FlowIntegral)(x0) = Flow(Φ)(x0,integrator(Φ))
 
-struct InitialCondition{F,X}
-    Φ::Flow{F}
+struct InitialCondition{L<:LieGroup,X}
+    Φ::L
     x0::X
-    InitialCondition(Φ::Flow{F},x0::X) where {F,X} = new{F,X}(Φ,x0)
+    InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,x0)
 end
 
 InitialCondition(f,x0,tmax) = InitialCondition(Flow(f,tmax),x0)
 InitialCondition(f,x0) = InitialCondition(f,x0,2π)
 
-Flow(ic::InitialCondition) = ic.Φ
-system(ic::InitialCondition) = system(Flow(ic))
-duration(ic::InitialCondition) = duration(Flow(ic))
+LieGroup(ic::InitialCondition) = ic.Φ
+system(ic::InitialCondition) = system(LieGroup(ic))
+duration(ic::InitialCondition) = duration(LieGroup(ic))
 parameter(ic::InitialCondition) = ic.x0
+integrator(ic::InitialCondition) = integrator(LieGroup(ic))
 (I::AbstractIntegrator)(ic::InitialCondition) = odesolve(ic,I)
 
+odesolve(ic::InitialCondition) = odesolve(ic,integrator(ic))
 odesolve(f,x0,tmax,tol,m,o=4) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     odesolve(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
@@ -438,6 +446,7 @@ end
 #integrange
 #integadapt
 
+odesolve2(ic::InitialCondition) = odesolve2(ic,integrator(ic))
 odesolve2(f,x0,tmax,tol,m,o=4) = odesolve2(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     odesolve2(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
@@ -478,7 +487,7 @@ geodesic(Γ,x0,v0) = GeodesicCondition(Γ,x0,v0,2π)
 geodesic(Γ,x0,v0,tmax::AbstractReal) = InitialCondition(geodesic(Γ),Chain(x0,v0),tmax)
 const Geodesic,GeodesicCondition = geodesic,geodesic,geodesic
 
-geosolve(ic::InitialCondition,i::AbstractIntegrator) = getindex.(odesolve(ic,i),1)
+geosolve(ic::InitialCondition,i::AbstractIntegrator=integrator(ic)) = getindex.(odesolve(ic,i),1)
 geosolve(Γ,x0,v0,tmax,tol,m,o=4) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
