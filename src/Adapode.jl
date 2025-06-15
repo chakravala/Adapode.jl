@@ -49,22 +49,32 @@ abstract type AdaptiveIntegrator <: AbstractIntegrator end
 
 struct EulerHeunIntegrator <: StepIntegrator
     tol::Float64
+    skip::Int
+    geo::Bool
 end
 
 struct ExplicitIntegrator{o} <: StepIntegrator
     tol::Float64
+    skip::Int
+    geo::Bool
 end
 
 struct ExplicitAdaptor{o} <: AdaptiveIntegrator
     tol::Float64
+    skip::Int
+    geo::Bool
 end
 
 struct MultistepIntegrator{o} <: StepIntegrator
     tol::Float64
+    skip::Int
+    geo::Bool
 end
 
 struct MultistepAdaptor{o} <: AdaptiveIntegrator
     tol::Float64
+    skip::Int
+    geo::Bool
 end
 
 AbstractIntegrator(tol=15,int::AbstractIntegrator=ExplicitIntegrator{4}) = int(tol)
@@ -83,9 +93,13 @@ function AbstractIntegrator(tol,M::Val{m},B::Val{o}=Val(4)) where {m,o}
     end
 end
 
-EulerHeunIntegrator(tol::Int) = EulerHeunIntegrator(2.0^-tol)
+EulerHeunIntegrator(tol,skip=1) = EulerHeunIntegrator(tol,skip,false)
+EulerHeunIntegrator(tol::Int,skip::Int=1,geo=false) = EulerHeunIntegrator(2.0^-tol,skip,geo)
 for fun ∈ (:ExplicitIntegrator,:ExplicitAdaptor,:MultistepIntegrator,:MultistepAdaptor)
-    @eval $fun{o}(tol::Int) where o = $fun{o}(2.0^-tol)
+    @eval begin
+        $fun{o}(tol,skip=1) where o = $fun{o}(tol,skip,false)
+        $fun{o}(tol::Int,skip::Int=1,geo=false) where o = $fun{o}(2.0^-tol,skip,geo)
+    end
 end
 
 mutable struct TimeStep{T}
@@ -168,7 +182,7 @@ function multistep!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
 end # more accurate compared with CAB[k] methods
 function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
     iszero(t.s) && initsteps!(x,f,fx,t)
-    xti = extract(x,t.i)
+    xti = typeof(x)<:LocalTensor ? x : extract(x,t.i)
     xi,tn = fiber(xti),point(xti)+step(t)
     xn = multistep!(xti,f,fx,t,k)
     t.s = (t.s%(m+1))+1; t.i += 1
@@ -222,7 +236,17 @@ function initsteps2(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
     initsteps(x0,t,tmax,m), Variables{o,fibertype(x0)}(undef)
 end
 
-function initsteps!(x,f,fx,t,B=Val(4))
+function initsteps!(x::LocalTensor,f,fx,t,B::Val=Val(4))
+    m = length(fx)-2
+    xi = x
+    for j ∈ 1:m
+        @inbounds fx[j] = localfiber(f(xi))
+        xi = (point(xi)+step(t)) ↦ explicit(xi,f,step(t),B)
+    end
+    t.s = 1+m
+    t.i += m
+end
+function initsteps!(x,f,fx,t,B::Val=Val(4))
     m = length(fx)-2
     xi = extract(x,t.i)
     for j ∈ 1:m
@@ -270,22 +294,41 @@ end
 init(x0) = 0.0 ↦ x0
 init(x0::Section) = x0
 
-export Flow, InitialCondition, InitialValueSetup
+export Flow, FlowIntegral, InitialCondition, integrator
 
 struct Flow{F}
     f::F
-    tmax::Float64
+    t::Float64
 end
 
+Flow(f::Flow) = f
+Flow(f) = Flow(f,2π)
 system(Φ::Flow) = Φ.f
-duration(Φ::Flow) = Φ.tmax
+duration(Φ::Flow) = Φ.t
 
-(Φ::Flow)(x0,i=MultistepIntegrator{4}(2^-15)) = odesolve(InitialCondition(Φ,x0),i)
+(Φ::Flow)(x0,i=ExplicitIntegrator{4}(2^-15,0)) = odesolve(InitialCondition(Φ,x0),i)
+(Φ::Flow)(x0::LocalTensor,i=ExplicitIntegrator{4}(2^-15,0)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
 
-function (Φ::Flow)(x0::TensorField,i=ExplicitIntegrator{4}(2^-11))
+function (Φ::Flow)(x0::TensorField,i=ExplicitIntegrator{4}(2^-11,0))
     ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
     odesolve(InitialCondition(ϕ,x0),i)
 end
+
+struct FlowIntegral{F,I<:AbstractIntegrator}
+    Φ::Flow{F}
+    i::I
+    FlowIntegral(Φ::Flow{F},i::I=ExplicitIntegrator{4}(2^-11)) where {F,I<:AbstractIntegrator} = new{F,I}(Φ,i)
+end
+
+FlowIntegral(f,tmax,i=ExplicitIntegrator{4}(2^-11)) = FlowIntegral(Flow(f,tmax))
+FlowIntegral(f) = FlowIntegral(f,2π)
+
+Flow(Φ::FlowIntegral) = Φ.Φ
+system(Φ::FlowIntegral) = system(Φ.Φ)
+duration(Φ::FlowIntegral) = duration(Φ.Φ)
+integrator(Φ::FlowIntegral) = Φ.i
+
+(Φ::FlowIntegral)(x0) = Flow(Φ)(x0,integrator(Φ))
 
 struct InitialCondition{F,X}
     Φ::Flow{F}
@@ -300,24 +343,8 @@ Flow(ic::InitialCondition) = ic.Φ
 system(ic::InitialCondition) = system(Flow(ic))
 duration(ic::InitialCondition) = duration(Flow(ic))
 parameter(ic::InitialCondition) = ic.x0
+(I::AbstractIntegrator)(ic::InitialCondition) = odesolve(ic,I)
 
-struct InitialValueSetup{F,X,I<:AbstractIntegrator}
-    ic::InitialCondition{F,X}
-    i::I
-end
-
-InitialCondition(iv::InitialValueSetup) = iv.ic
-AbstractIntegrator(iv::InitialValueSetup) = iv.i
-system(iv::InitialValueSetup) = system(InitialCondition(iv))
-duration(iv::InitialValueSetup) = duration(InitialCondition(iv))
-parameter(iv::InitialValueSetup) = parameter(InitialCondition(iv))
-
-InitialValueSetup(f,x0,tmax,tol,m,o=4) = InitialValueSetup(f,x0,tmax,tol,Val(m),Val(o))
-function InitialValueSetup(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
-    InitialValueSetup(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
-end
-
-odesolve(ode::InitialValueSetup) = odesolve(InitialCondition(ode),AbstractIntegrator(ode))
 odesolve(f,x0,tmax,tol,m,o=4) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     odesolve(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
@@ -332,12 +359,32 @@ function odesolve(ic::InitialCondition,I::EulerHeunIntegrator)
 end
 function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o}) where o
     t,B = TimeStep(I),Val(o)
-    x = initsteps(parameter(ic),t,duration(ic),Val(true))
-    println(typeof(x))
-    for i ∈ 2:size(x)[end]
-        assign!(x,i,explicit(extract(x,i-1),system(ic),step(t),B))
+    stp = step(t)
+    if iszero(I.skip) # don't allocate
+        xi = init(parameter(ic))
+        n = Int(round((duration(ic)-point(xi))/stp))
+        for i ∈ 2:abs(n)+1
+            xi = LocalTensor(point(xi)+sign(n)*stp,explicit(xi,system(ic),sign(n)*stp,B))
+        end
+        return xi
+    elseif isone(I.skip) # full allocations
+        x = initsteps(parameter(ic),t,duration(ic),Val(true))
+        for i ∈ 2:size(x)[end]
+            assign!(x,i,explicit(extract(x,i-1),system(ic),stp,B))
+        end
+        return x
+    else # skip some allocations
+        x = initsteps(parameter(ic),t,duration(ic),Val(true))
+        skip = list(1,I.skip)
+        for i ∈ 2:size(x)[end]
+            xi = extract(x,i-1)
+            for i ∈ skip
+                xi = LocalTensor(point(xi)+stp,explicit(xi,system(ic),stp,B))
+            end
+            assign!(x,i,fiber(xi))
+        end
+        return x
     end
-    return x
 end
 function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
     t,B = TimeStep(I),Val(o)
@@ -349,11 +396,35 @@ function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
 end
 function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
     t,B = TimeStep(I),Val(o)
-    x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
-    for i ∈ o+1:size(x)[end] # o+1 changed to o
-        assign!(x,i,predictcorrect(x,system(ic),fx,t,B))
+    stp = step(t)
+    if iszero(I.skip) # don't allocate
+        xi = init(parameter(ic))
+        fx = Variables{o+1,fibertype(xi)}(undef)
+        n = Int(round((duration(ic)-point(xi))/stp))
+        pxi = point(xi)+(o-1)*sign(n)*stp
+        for i ∈ o+1:abs(n)+1 # o+1 changed to o
+            xi = LocalTensor(pxi+sign(n)*stp,predictcorrect(xi,system(ic),fx,t,B))
+            pxi = point(xi)
+        end
+        return xi
+    elseif isone(I.skip) # full allocations
+        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
+        for i ∈ o+1:size(x)[end] # o+1 changed to o
+            assign!(x,i,predictcorrect(x,system(ic),fx,t,B))
+        end
+        return x
+    else # skip some allocations
+        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
+        skip = list(1,I.skip)
+        for i ∈ o+1:size(x)[end] # o+1 changed to o
+            xi = extract(x,i-1)
+            for i ∈ skip
+                xi = LocalTensor(point(xi)+stp,predictcorrect(x,system(ic),fx,t,B))
+            end
+            assign!(x,i,fiber(xi))
+        end
+        return x
     end
-    return x
 end
 function odesolve(ic::InitialCondition,I::MultistepAdaptor{o}) where o
     t,B = TimeStep(I),Val(o)
@@ -367,7 +438,6 @@ end
 #integrange
 #integadapt
 
-odesolve2(ode::InitialValueSetup) = odesolve2(ode.ic,ode.i)
 odesolve2(f,x0,tmax,tol,m,o=4) = odesolve2(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve2(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     odesolve2(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
@@ -408,7 +478,6 @@ geodesic(Γ,x0,v0) = GeodesicCondition(Γ,x0,v0,2π)
 geodesic(Γ,x0,v0,tmax::AbstractReal) = InitialCondition(geodesic(Γ),Chain(x0,v0),tmax)
 const Geodesic,GeodesicCondition = geodesic,geodesic,geodesic
 
-geosolve(ode::InitialValueSetup) = getindex.(odesolve(ode),1)
 geosolve(ic::InitialCondition,i::AbstractIntegrator) = getindex.(odesolve(ic,i),1)
 geosolve(Γ,x0,v0,tmax,tol,m,o=4) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
