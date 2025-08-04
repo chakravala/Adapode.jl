@@ -18,7 +18,7 @@ module Adapode
 #  |___|___||_____||___._||   __||_____||_____||_____|
 #                         |__|
 
-using SparseArrays, LinearAlgebra, Grassmann, Cartan, Requires
+using SparseArrays, LinearAlgebra, Grassmann, Cartan
 import Grassmann: value, vector, valuetype, tangent, list
 import Grassmann: Values, Variables, FixedVector
 import Grassmann: Scalar, GradedVector, Bivector, Trivector
@@ -307,6 +307,7 @@ end
 
 Flow(f::Flow) = f
 Flow(f) = Flow(f,2π)
+Flow(f,t::Real) = Flow(f,float(t))
 system(Φ::Flow) = Φ.f
 duration(Φ::Flow) = Φ.t
 integrator(::Flow) = ExplicitIntegrator{4}(2^-11,0)
@@ -519,33 +520,14 @@ truncate!(x,i) = length(x)>i+1 && resize_lastdim!(x,i)
 
 show_progress(x,t,b) = t.i%75000 == 11 && println(point(x[t.i])," out of ",b)
 
+if !isdefined(Base, :get_extension)
+using Requires
+end
+
+@static if !isdefined(Base, :get_extension)
 function __init__()
-    @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" begin
-        Makie.lines!(ϕ::FlowIntegral,xi::Vector{<:Chain};args...) = Makie.lines(ϕ,xi,Makie.lines!;args...)
-        Makie.lines!(X::Function,xi::Vector{<:Chain},t::Float64=1.0;args...) = Makie.lines(FlowIntegral(X,t),xi,Makie.lines!;args...)
-        Makie.lines!(X::VectorField,xi::Vector{<:Chain},t::Float64=1.0;args...) = Makie.lines(FlowIntegral(X,t),xi,Makie.lines!;args...)
-        Makie.lines(X::Function,xi::Vector{<:Chain},t::Float64=1.0,lines=Makie.lines;args...) = Makie.lines(FlowIntegral(X,t),xi,lines;args...)
-        Makie.lines(X::VectorField,xi::Vector{<:Chain},t::Float64=1.0,lines=Makie.lines;args...) = Makie.lines(FlowIntegral(X,t),xi,lines;args...)
-        function Makie.lines(ϕ::FlowIntegral,xi::Vector{<:Chain},lines=Makie.lines;args...)
-            display(lines(ϕ(xi[1]),args...))
-            for i ∈ 2:length(xi)
-                Makie.lines!(ϕ(xi[i]),args...)
-            end
-        end
-        Makie.lines!(ϕ::Flow,t::AbstractCurve,n::Int=7;args...) = Makie.lines(ϕ,t,n,Makie.lines!;args...)
-        Makie.lines!(X::Function,t::AbstractCurve,n::Int=7;args...) = Makie.lines(X,t,n,Makie.lines!;args...)
-        Makie.lines!(X::VectorField,t::AbstractCurve,n::Int=7;args...) = Makie.lines(X,t,n,Makie.lines!;args...)
-        Makie.lines(X::Function,t::AbstractCurve,n::Int=7,lines=Makie.lines;args...) = Makie.lines(Flow(X,0.2),t,n,lines;args...)
-        Makie.lines(X::VectorField,t::AbstractCurve,n::Int=7,lines=Makie.lines;args...) = Makie.lines(Flow(X,0.2),t,n,lines;args...)
-        function Makie.lines(ϕ::Flow,t::AbstractCurve,n::Int=7,lines=Makie.lines;args...)
-            display(lines(t,args...))
-            ϕt = t
-            for i ∈ 1:n
-                ϕt = ϕ(ϕt)
-                Makie.lines!(fiber(ϕt),args...)
-            end
-        end
-    end
+    @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" include("../ext/MakieExt.jl")
+end
 end
 
 end # module
