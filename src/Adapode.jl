@@ -198,7 +198,7 @@ function predictcorrect(x,f,fx,t,::Val{1})
     fiber(xti)+h*localfiber(f((point(xti)+h)↦(fiber(xti)+h*localfiber(f(xti)))))
 end
 
-initsteps(x0,t,tmax,m) = initsteps(init(x0),t,tmax,m)
+initsteps(x0,t,tmax,m) = initsteps(init(x0,t),t,tmax,m)
 initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
 function initsteps(x0::Section,t,tmax,::Val{m}) where m
     tmin,f0 = base(x0),fiber(x0)
@@ -293,8 +293,9 @@ function predictcorrect!(x,f,fx,t,::Val{1})
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
 
-init(x0) = 0.0 ↦ x0
-init(x0::Section) = x0
+init(x0,t::TimeStep) = init(x0,step(t))
+init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
+init(x0::Section,h::T=1.0) where T = one(T)*x0
 
 export LieGroup, Flow, FlowIntegral, InitialCondition
 
@@ -370,7 +371,7 @@ function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o}) where o
     t,B = TimeStep(I),Val(o)
     stp = step(t)
     if iszero(I.skip) # don't allocate
-        xi = init(parameter(ic))
+        xi = init(parameter(ic),t)
         n = Int(round((duration(ic)-point(xi))/stp))
         for i ∈ 2:abs(n)+1
             xi = LocalTensor(point(xi)+sign(n)*stp,explicit(xi,system(ic),sign(n)*stp,B))
@@ -407,7 +408,7 @@ function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
     t,B = TimeStep(I),Val(o)
     stp = step(t)
     if iszero(I.skip) # don't allocate
-        xi = init(parameter(ic))
+        xi = init(parameter(ic),t)
         fx = Variables{o+1,fibertype(xi)}(undef)
         n = Int(round((duration(ic)-point(xi))/stp))
         pxi = point(xi)+(o-1)*sign(n)*stp
