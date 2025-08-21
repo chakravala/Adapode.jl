@@ -32,7 +32,7 @@ export ElementFunction, IntervalMap, PlaneCurve, SpaceCurve, SurfaceGrid, Scalar
 export TensorField, ScalarField, VectorField, BivectorField, TrivectorField
 export RealFunction, ComplexMap, SpinorField, CliffordField
 export MeshFunction, GradedField, QuaternionField # PhasorField
-export Section, FiberBundle, AbstractFiber
+export LocalTensor, FiberBundle, AbstractFiber
 export base, fiber, domain, codomain, ↦, →, ←, ↤, basetype, fibertype
 export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺, ⊕
 
@@ -162,7 +162,7 @@ end
 
 @pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
 @pure blength(n::Val{N},a::Val{A}=Val(false)) where {N,A} = Val(length(butcher(n,a))-A)
-function butcher(x::Section{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
+function butcher(x::LocalTensor{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
     b = butcher(v,a)
     n = length(b)-A
     # switch to isbits(F)
@@ -200,7 +200,7 @@ end
 
 initsteps(x0,t,tmax,m) = initsteps(init(x0,t),t,tmax,m)
 initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
-function initsteps(x0::Section,t,tmax,::Val{m}) where m
+function initsteps(x0::LocalTensor,t,tmax,::Val{m}) where m
     tmin,f0 = base(x0),fiber(x0)
     n = Int(round((tmax-tmin)/step(t)))+1
     t = m ? (tmin:step(t):tmax) : Vector{typeof(t.h)}(undef,n)
@@ -209,7 +209,7 @@ function initsteps(x0::Section,t,tmax,::Val{m}) where m
     assign!(x,1,fiber(f0))
     return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
-function initsteps(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
+function initsteps(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
     initsteps(x0,t,tmax,m), Variables{o+1,fibertype(x0)}(undef)
 end
 
@@ -234,7 +234,7 @@ function predictcorrect2(x,f,fx,t,::Val{1})
 end
 
 initsteps2(x0,t,tmax,f,m,B) = initsteps2(init(x0),t,tmax,f,m,B)
-function initsteps2(x0::Section,t,tmax,f,m,B::Val{o}=Val(4)) where o
+function initsteps2(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
     initsteps(x0,t,tmax,m), Variables{o,fibertype(x0)}(undef)
 end
 
@@ -295,7 +295,7 @@ end
 
 init(x0,t::TimeStep) = init(x0,step(t))
 init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
-init(x0::Section,h::T=1.0) where T = one(T)*x0
+init(x0::LocalTensor,h::T=1.0) where T = one(T)*x0
 
 export LieGroup, Flow, FlowIntegral, InitialCondition
 
