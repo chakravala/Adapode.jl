@@ -106,6 +106,7 @@ end
 
 mutable struct TimeStep{T}
     h::T # step
+    skip::Int
     hmin::T # min step
     hmax::T # max step
     emin::T
@@ -113,11 +114,11 @@ mutable struct TimeStep{T}
     e::T
     i::Int
     s::Int
-    function TimeStep(h,hmin=1e-16,hmax=h>1e-4 ? h : 1e-4,emin=10^(log2(h)-3),emax=10^log2(h))
-        checkstep!(new{typeof(h)}(h,hmin,hmax,emin,emax,(emin+emax)/2,1,0))
+    function TimeStep(h,skip=1,hmin=1e-16,hmax=h>1e-4 ? h : 1e-4,emin=10^(log2(h)-3),emax=10^log2(h))
+        checkstep!(new{typeof(h)}(h,skip,hmin,hmax,emin,emax,(emin+emax)/2,1,0))
     end
 end
-TimeStep(I::AbstractIntegrator) = TimeStep(I.tol)
+TimeStep(I::AbstractIntegrator) = TimeStep(I.tol,I.skip)
 
 Base.step(t::TimeStep) = t.h
 
@@ -202,15 +203,15 @@ initsteps(x0,t,tmax,m) = initsteps(init(x0,t),t,tmax,m)
 initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
 function initsteps(x0::LocalTensor,t,tmax,::Val{m}) where m
     tmin,f0 = base(x0),fiber(x0)
-    n = Int(round((tmax-tmin)/step(t)))+1
-    t = m ? (tmin:step(t):tmax) : Vector{typeof(t.h)}(undef,n)
+    n = Int(round((tmax-tmin)/step(t)/t.skip))+1
+    t = m ? (tmin:step(t)*t.skip:tmax) : Vector{typeof(t.h)}(undef,n)
     (!m) && (t[1] = tmin)
     x = Array{fibertype(fibertype(x0)),ndims(f0)+1}(undef,size(f0)...,m ? length(t) : n)
     assign!(x,1,fiber(f0))
     return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
 function initsteps(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
-    initsteps(x0,t,tmax,m), Variables{o+1,fibertype(x0)}(undef)
+    initsteps(x0,t,tmax,m), Base.isbitstype(fibertype(x0)) ? Variables{o+1,fibertype(x0)}(undef) : FixedVector{o+1,fibertype(x0)}(undef)
 end
 
 function multistep2!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
@@ -254,7 +255,7 @@ function initsteps!(x,f,fx,t,B::Val=Val(4))
     for j ∈ 1:m
         @inbounds fx[j] = localfiber(f(xi))
         xi = (point(xi)+step(t)) ↦ explicit(xi,f,step(t),B)
-        assign!(x,t.i+j,xi)
+        assign!(x,t.i+j,fiber(xi))
     end
     t.s = 1+m
     t.i += m
@@ -405,7 +406,7 @@ function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
     return resize(x)
 end
 function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
-    t,B = TimeStep(I),Val(o)
+    t,B = TimeStep(I.tol),Val(o)
     stp = step(t)
     if iszero(I.skip) # don't allocate
         xi = init(parameter(ic),t)
@@ -420,7 +421,7 @@ function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
     elseif isone(I.skip) # full allocations
         x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
-            assign!(x,i,predictcorrect(x,system(ic),fx,t,B))
+            assign!(x,i,fiber(predictcorrect(x,system(ic),fx,t,B)))
         end
         return x
     else # skip some allocations
@@ -428,8 +429,8 @@ function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
         skip = list(1,I.skip)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
             xi = extract(x,i-1)
-            for i ∈ skip
-                xi = LocalTensor(point(xi)+stp,predictcorrect(x,system(ic),fx,t,B))
+            for j ∈ skip
+                xi = LocalTensor(point(xi)+stp,predictcorrect(xi,system(ic),fx,t,B))
             end
             assign!(x,i,fiber(xi))
         end
