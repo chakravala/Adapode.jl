@@ -211,7 +211,14 @@ function initsteps(x0::LocalTensor,t,tmax,::Val{m}) where m
     return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
 function initsteps(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
-    initsteps(x0,t,tmax,m), Base.isbitstype(fibertype(x0)) ? Variables{o+1,fibertype(x0)}(undef) : FixedVector{o+1,fibertype(x0)}(undef)
+    x = initsteps(x0,t,tmax,m)
+    xi = extract(x,1)
+    fx = if Base.isbitstype(fibertype(xi))
+        Variables{o+1,fibertype(xi)}(undef)
+    else
+        FixedVector{o+1,fibertype(xi)}(undef)
+    end
+    return (x,fx)
 end
 
 function multistep2!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
@@ -236,7 +243,8 @@ end
 
 initsteps2(x0,t,tmax,f,m,B) = initsteps2(init(x0),t,tmax,f,m,B)
 function initsteps2(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
-    initsteps(x0,t,tmax,m), Variables{o,fibertype(x0)}(undef)
+    x = initsteps(x0,t,tmax,m)
+    x,Variables{o,fibertype(extract(x,1))}(undef)
 end
 
 function initsteps!(x::LocalTensor,f,fx,t,B::Val=Val(4))
@@ -298,7 +306,7 @@ init(x0,t::TimeStep) = init(x0,step(t))
 init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
 init(x0::LocalTensor,h::T=1.0) where T = one(T)*x0
 
-export LieGroup, Flow, FlowIntegral, InitialCondition
+export LieGroup, Flow, FlowIntegral, InitialCondition, IC
 
 abstract type LieGroup{F} end
 
@@ -345,6 +353,7 @@ struct InitialCondition{L<:LieGroup,X}
     InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,x0)
 end
 
+const IC = InitialCondition
 InitialCondition(f,x0,tmax) = InitialCondition(Flow(f,tmax),x0)
 InitialCondition(f,x0) = InitialCondition(f,x0,2π)
 
