@@ -304,6 +304,7 @@ end
 
 init(x0,t::TimeStep) = init(x0,step(t))
 init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
+init(x0::LocalTensor,t::TimeStep) = init(x0,step(t))
 init(x0::LocalTensor,h::T=1.0) where T = one(T)*x0
 
 export LieGroup, Flow, FlowIntegral, InitialCondition, IC
@@ -326,6 +327,7 @@ Base.exp(X::TensorField{B,<:Chain{V,1}} where {B,V}) = Flow(X,1.0)
 (Φ::Flow)(x0,i=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
 (Φ::Flow)(x0::LocalTensor,i=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
 
+(Φ::Flow)(x0::LocalTensor{B,<:TensorField} where B,i=integrator(Φ)) = Φ(fiber(x0),i)
 function (Φ::Flow)(x0::TensorField,i=integrator(Φ))
     ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
     odesolve(InitialCondition(ϕ,x0),i)

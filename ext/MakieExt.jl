@@ -27,8 +27,8 @@ function Makie.lines(ϕ::FlowIntegral,xi::Vector{<:Chain};args...)
     return out
 end
 
-Makie.lines!(X::Function,xi::Vector{<:Chain},t=1;args...) = Makie.lines(FlowIntegral(X,t),xi;args...)
-Makie.lines!(X::VectorField,xi::Vector{<:Chain},t=1;args...) = Makie.lines(FlowIntegral(X,t),xi;args...)
+Makie.lines!(X::Function,xi::Vector{<:Chain},t=1;args...) = Makie.lines!(FlowIntegral(X,t),xi;args...)
+Makie.lines!(X::VectorField,xi::Vector{<:Chain},t=1;args...) = Makie.lines!(FlowIntegral(X,t),xi;args...)
 function Makie.lines!(ϕ::FlowIntegral,xi::Vector{<:Chain};args...)
     Makie.lines!(ϕ(xi[1]),args...)
     for i ∈ 2:length(xi)
@@ -49,8 +49,8 @@ function Makie.lines(ϕ::Flow,t::AbstractCurve,n::Int=7;args...)
     return out
 end
 
-Makie.lines!(X::Function,t::AbstractCurve,n::Int=7;args...) = Makie.lines(X,t,n;args...)
-Makie.lines!(X::VectorField,t::AbstractCurve,n::Int=7;args...) = Makie.lines(X,t,n;args...)
+Makie.lines!(X::Function,t::AbstractCurve,n::Int=7;args...) = Makie.lines!(Flow(X,0.2),t,n;args...)
+Makie.lines!(X::VectorField,t::AbstractCurve,n::Int=7;args...) = Makie.lines!(Flow(X,0.2),t,n;args...)
 function Makie.lines!(ϕ::Flow,t::AbstractCurve,n::Int=7;args...)
     Makie.lines!(t,args...)
     ϕt = t
