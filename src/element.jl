@@ -21,8 +21,11 @@ export solvepoisson, solvetransport, solvetransportdiffusion, solvemaxwell, adap
 export solveelastic, solvenonlinearpoisson, solvebistable, solvebistable_newton
 export solvedirichlet, solveheat, solvewave, solvestokes, solvenavierstokes
 export gradienthat, gradientCR, gradient, interp, nedelec, nedelecmean, jumps
-export submesh, detsimplex, iterable, callable, value, laplacian
+export submesh, detsimplex, iterable, callable, value, laplacian, biharmonic
 export interior, trilength, trinormals, incidence, degrees, solvepoissonDIPG
+export helmholtz, solvehelmholtz, solvenonlinearhelmholtz, polarlaplacian
+export reshapedirichlet, reshapepolardirichlet, solvepolardirichlet, orrsommerfeld
+export solveiteration, dirichlet!
 
 using Base.Threads
 import Grassmann: norm, column, columns
@@ -182,6 +185,37 @@ function adaptpoisson(g,pt,pe,c=1,a=0,f=1,κ=1e6,gD=0,gN=0)
     return g,pt,pe
 end
 
+function dirichlet!(u)
+    u[1] = u[end] = 0
+    return u
+end
+function dirichlet!(u::AbstractMatrix)
+    fiber(u)[1,:] .= fiber(u)[end,:] .= 0
+    fiber(u)[:,1] .= fiber(u)[:,end] .= 0
+    return u
+end
+function dirichlet!(u::AbstractArray{T,3} where T)
+    fiber(u)[1,:,:] .= fiber(u)[end,:,:] .= 0
+    fiber(u)[:,1,:] .= fiber(u)[:,end,:] .= 0
+    fiber(u)[:,:,1] .= fiber(u)[:,:,end] .= 0
+    return u
+end
+function dirichlet!(u::AbstractArray{T,4} where T)
+    fiber(u)[1,:,:,:] .= fiber(u)[end,:,:,:] .= 0
+    fiber(u)[:,1,:,:] .= fiber(u)[:,end,:,:] .= 0
+    fiber(u)[:,:,1,:] .= fiber(u)[:,:,end,:] .= 0
+    fiber(u)[:,:,:,1] .= fiber(u)[:,:,:,end] .= 0
+    return u
+end
+function dirichlet!(u::AbstractArray{T,5} where T)
+    fiber(u)[1,:,:,:,:] .= fiber(u)[end,:,:,:,:] .= 0
+    fiber(u)[:,1,:,:,:] .= fiber(u)[:,end,:,:,:] .= 0
+    fiber(u)[:,:,1,:,:] .= fiber(u)[:,:,end,:,:] .= 0
+    fiber(u)[:,:,:,1,:] .= fiber(u)[:,:,:,end,:] .= 0
+    fiber(u)[:,:,:,:,1] .= fiber(u)[:,:,:,:,end] .= 0
+    return u
+end
+
 solvedirichlet(M,b,e::SimplexBundle) = solvedirichlet(M,b,vertices(e))
 solvedirichlet(M,b,e::SimplexTopology) = solvedirichlet(M,b,vertices(e))
 solvedirichlet(M,b,e::SimplexBundle,u) = solvedirichlet(M,b,vertices(e),u)
@@ -198,6 +232,268 @@ function solvedirichlet(M,b,fixed)
     free,ξ = interior(fixed,neq),zeros(eltype(b),neq)
     ξ[free] = M[free,free]\b[free]
     return ξ
+end
+
+to_TensorField(f::TensorField,u) = TensorField(f,u)
+to_TensorField(f,u) = u
+
+function reshapedirichlet(f::AbstractVector,u)
+    N = length(f)
+    uu = zeros(N)
+    uu[2:N-1] .= u
+    to_TensorField(f,uu)
+end
+function reshapedirichlet(f::AbstractMatrix,u)
+    N,M = size(f)
+    uu = zeros(N,M)
+    uu[2:N-1,2:M-1] .= reshape(u,N-2,M-2)
+    to_TensorField(f,uu)
+end
+function reshapedirichlet(f::AbstractArray{T,3} where T,u)
+    N,M,O = size(f)
+    uu = zeros(N,M,O)
+    uu[2:N-1,2:M-1,2:O-1] .= reshape(u,N-2,M-2,O-2)
+    to_TensorField(f,uu)
+end
+function reshapedirichlet(f::AbstractArray{T,4} where T,u)
+    N,M,O,P = size(f)
+    uu = zeros(N,M,O,P)
+    uu[2:N-1,2:M-1,2:O-1,2:P-1] .= reshape(u,N-2,M-2,O-2,P-2)
+    to_TensorField(f,uu)
+end
+function reshapedirichlet(f::AbstractArray{T,5} where T,u)
+    N,M,O,P,Q = size(f)
+    uu = zeros(N,M,O,P,Q)
+    uu[2:N-1,2:M-1,2:O-1,2:P-1,2:Q-1] .= reshape(u,N-2,M-2,O-2,P-2,Q-2)
+    to_TensorField(f,uu)
+end
+
+function reshapepolardirichlet(f::AbstractMatrix,u)
+    N,M = size(f)
+    uu = [zeros(1,M); reshape(u,N-1,M-1)[:,vcat(M-1,1:M-1)]]
+    to_TensorField(f,uu)
+end
+
+function solvedirichlet(L,f::AbstractVector)
+    N = length(f)
+    reshapedirichlet(f,L\vec(fiber(f)[2:N-1]))
+end
+function solvedirichlet(L,f::AbstractMatrix)
+    N,M = size(f)
+    reshapedirichlet(f,L\vec(fiber(f)[2:N-1,2:M-1]))
+end
+function solvedirichlet(L,f::AbstractArray{T,3} where T)
+    N,M,O = size(f)
+    reshapedirichlet(f,L\vec(fiber(f)[2:N-1,2:M-1,2:O-1]))
+end
+function solvedirichlet(L,f::AbstractArray{T,4} where T)
+    N,M,O,P = size(f)
+    reshapedirichlet(f,L\vec(fiber(f)[2:N-1,2:M-1,2:O-1,2:P-1]))
+end
+function solvedirichlet(L,f::AbstractArray{T,5} where T)
+    N,M,O,P,Q = size(f)
+    reshapedirichlet(f,L\vec(fiber(f)[2:N-1,2:M-1,2:O-1,2:P-1,2:Q-1]))
+end
+
+#=function solvepolardirichlet(L,f::AbstractMatrix)
+    N,M = size(f)
+    u = reshape(L\vec(fiber(f)[2:N,2:M]),N-1,M-1)
+    uu = [zeros(1,M); u[:,vcat(M-1,1:M-1)]]
+    to_TensorField(f,uu/norm(u,Inf))
+end=#
+function solvepolardirichlet(L,f::AbstractMatrix)
+    N,M = size(f)
+    u = reshapepolardirichlet(f,L\vec(fiber(f)[2:N,2:M]))
+    u/norm(fiber(u),Inf)
+end
+
+
+function solveiteration(L,f,u,solver=\)
+    change = 1
+    while change > 5eps()
+        unew = solver(L,f.(u))
+        change = norm(fiber(unew-u),Inf)
+        u = unew
+    end; return u
+end
+
+function helmholtz(f::AbstractVector,k=0)
+    N = length(f)
+    (ChebyshevMatrix(f)^2)[2:N-1,2:N-1] + k^2*I
+end
+function helmholtz(f::AbstractMatrix,k=0)
+    N,M = size(f)
+    x,y = split(points(f))
+    D2X = (ChebyshevMatrix(x)^2)[2:N-1,2:N-1]
+    D2Y = (ChebyshevMatrix(y)^2)[2:M-1,2:M-1]
+    kron(I(M-2),D2X) + kron(D2Y,I(N-2)) + k^2*I
+end
+
+solvehelmholtz(f,k=0) = solvedirichlet(helmholtz(f,k),f)
+
+function solvenonlinearhelmholtz(f,k,N::Int)
+    nonlinearhelmholtz(f,k,TensorField(Chebyshev(N),zeros(N)))
+end
+function solvenonlinearhelmholtz(f,k,N::Int,M::Int)
+    x,y = Chebyshev(N),Chebyshev(M)
+    u = TensorField(ProductSpace{2}(x,y),zeros(N,M))
+    nonlinearhelmholtz(f,k,u)
+end
+function solvenonlinearhelmholtz(f,k,u::TensorField)
+    solveiteration(helmholtz(u,k),f,u,solvedirichlet)
+end
+
+function polarlaplacian(N=13,M=21)
+    r = Chebyshev(2N)
+    D = ChebyshevMatrix(r); D2 = D^2
+    D1,D2 = D2[2:N,2:N],D2[2:N,2N-1:-1:N+1]
+    E1,E2 = D[2:N,2:N],D[2:N,2N-1:-1:N+1]
+    D2t,R = derivetoeplitz2(M-1),Diagonal(inv.(r[2:N]))
+    M2 = Int((M-1)/2); Z = zeros(M2,M2)
+    kron(I(M-1),D1+R*E1)+kron([Z I;I Z],D2+R*E2)+kron(D2t,R^2)
+end
+
+function biharmonic(v::AbstractVector,D=ChebyshevMatrix(points(v)))
+    x = points(v)
+    N = length(x)
+    S = Diagonal(vcat(0,inv.(1.0.-x[2:N-1].^2),0))
+    ((Diagonal(1.0.-x.^2)*D^4 - 8Diagonal(x)*D^3 - 12D^2)*S)[2:N-1,2:N-1]
+end
+
+function biharmonic(v::AbstractMatrix)
+    N,M = size(v)
+    x,y = split(points(v))
+    DX,DY = ChebyshevMatrix(points(x)),ChebyshevMatrix(points(y)) # reverse x?
+    D2X,D2Y = (DX^2)[2:N-1,2:N-1],(DY^2)[2:M-1,2:M-1]
+    D4X,D4Y = biharmonic(x,DX),biharmonic(y,DY)
+    kron(I(M-2),D4X) + kron(D4Y,I(N-2)) + 2kron(D2Y,I(N-2))*kron(I(M-2),D2X)
+end
+
+function orrsommerfeld(v,R=5772)
+    N = length(v)
+    x = points(v)
+    D = ChebyshevMatrix(x)
+    D2 = (D^2)[2:N-1,2:N-1]
+    D4 = biharmonic(v,D)
+    A = (D4-2D2+I(N-2))/R - 2im*I(N-2) - im*Diagonal(1.0.-x[2:N-1].^2)*(D2-I(N-2))
+    B = D2 - I(N-2)
+    return A,B
+end
+
+restwavemultiplier(k,t) = cos(t*Real(abs(k)))
+wavemultiplier(k,t) = (ak = Real(abs(k)); sin(t*ak)/ak)
+heatmultiplier(k,t) = exp(-t*Real(abs2(k)))
+rieszmultiplier(k,t,s=2) = exp(-t*Real(abs2(k))^(s/2))
+biharmonicmultiplier(k,t) = exp(-t*Real(abs2(k))^2)
+schrodingermultiplier(k,t) = exp((-im/2)*t*Real(abs2(k)))
+#heatkernel(u0,t,k=r2rspace(points(u0))) = idct(heatmultiplier.(k,t))
+
+function rieszdirichlet end
+function wavedirichlet end
+
+heatperiodic(u0,t,k=rfftspace(points(u0))) = Cartan.irfft(Cartan.rfft(u0).*heatmultiplier.(k,t))
+rieszperiodic(u0,t,s=2,k=rfftspace(points(u0))) = Cartan.irfft(Cartan.rfft(u0).*rieszmultiplier.(k,t,s))
+biharmonicperiodic(u0,t,k=rfftspace(points(u0))) = Cartan.irfft(Cartan.rfft(u0).*biharmonicmultiplier.(k,t))
+restwaveperiodic(u0,t,k=rfftspace(points(u0))) = Cartan.irfft(Cartan.rfft(u0).*restwavemultiplier.(k,t))
+function waveperiodic(u0,u1,t,k=rfftspace(points(u0)))
+    wm = wavemultiplier.(k,t); wm[1] = 0
+    Cartan.irfft(Cartan.rfft(u0).*restwavemultiplier.(k,t)+Cartan.rfft(u1).*wm)
+end
+function fullwaveperiodic(u0,u1,t,k=rfftspace(points(u0)))
+    wm = wavemultiplier.(k,t); wm[1] = t
+    Cartan.irfft(Cartan.rfft(u0).*restwavemultiplier.(k,t)+Cartan.rfft(u1).*wm)
+end
+schrodingerperiodic(u0,t,k=fftspace(points(u0))) = Cartan.ifft(Cartan.fft(u0).*schrodingermultiplier.(k,t))
+schrodingerperiodic(u0,t::AbstractVector,k=fftspace(points(u0))) = schrodingerperiodic(u0,TensorField(t),k)
+
+function schrodingerperiodic(u0,t::TensorField,k=fftspace(points(u0)))
+    data = zeros(size(u0)...,length(t))
+    out = TensorField(base(u0)⊕base(t),data)
+    assign!(out,1,u0)
+    for i in 2:length(t)
+        assign!(out,i,schrodingerperiodic(u0,fiber(t)[i],k))
+    end
+    return out
+end
+
+export wavedirichlet, wavemultiplier, schrodingerperiodic
+export rieszdirichlet, rieszneumann, rieszperiodic, rieszmultiplier
+export heatmultiplier, restwavemultiplier, biharmonicmultiplier
+
+for fun ∈ (:heat,:restwave,:biharmonic)
+    nfun,pfun,dfun = Symbol(fun,:neumann),Symbol(fun,:periodic),Symbol(fun,:dirichlet)
+    @eval begin
+        export $nfun, $pfun, $dfun
+        function $dfun end
+        $nfun(u0,t::AbstractVector,k=r2rspace(points(u0))) = $nfun(u0,TensorField(t),k)
+        function $nfun(u0,t::TensorField,k=r2rspace(points(u0)))
+            data = zeros(size(u0)...,length(t))
+            out = TensorField(base(u0)⊕base(t),data)
+            assign!(out,1,u0)
+            for i in 2:length(t)
+                assign!(out,i,$nfun(u0,fiber(t)[i],k))
+            end
+            return out
+        end
+        $pfun(u0,t::AbstractVector,k=rfftspace(points(u0))) = $pfun(u0,TensorField(t),k)
+        function $pfun(u0,t::TensorField,k=rfftspace(points(u0)))
+            data = zeros(size(u0)...,length(t))
+            out = TensorField(base(u0)⊕base(t),data)
+            assign!(out,1,u0)
+            for i in 2:length(t)
+                assign!(out,i,$pfun(u0,fiber(t)[i],k))
+            end
+            return out
+        end
+    end
+end
+
+for fun ∈ (:wave,:fullwave)
+    nfun,pfun = Symbol(fun,:neumann),Symbol(fun,:periodic)
+    @eval begin
+        export $nfun, $pfun
+        $nfun(u0,u1,t::AbstractVector,k=r2rspace(points(u0))) = $nfun(u0,u1,TensorField(t),k)
+        function $nfun(u0,u1,t::TensorField,k=r2rspace(points(u0)))
+            data = zeros(size(u0)...,length(t))
+            out = TensorField(base(u0)⊕base(t),data)
+            assign!(out,1,u0)
+            for i in 2:length(t)
+                assign!(out,i,$nfun(u0,u1,fiber(t)[i],k))
+            end
+            return out
+        end
+        $pfun(u0,u1,t::AbstractVector,k=rfftspace(points(u0))) = $pfun(u0,u1,TensorField(t),k)
+        function $pfun(u0,u1,t::TensorField,k=rfftspace(points(u0)))
+            data = zeros(size(u0)...,length(t))
+            out = TensorField(base(u0)⊕base(t),data)
+            assign!(out,1,u0)
+            for i in 2:length(t)
+                assign!(out,i,$pfun(u0,u1,fiber(t)[i],k))
+            end
+            return out
+        end
+    end
+end
+
+rieszneumann(u0,t::AbstractVector,s=2,k=r2rspace(points(u0))) = rieszneumann(u0,TensorField(t),s,k)
+function rieszneumann(u0,t::TensorField,s=2,k=r2rspace(points(u0)))
+    data = zeros(size(u0)...,length(t))
+    out = TensorField(base(u0)⊕base(t),data)
+    assign!(out,1,u0)
+    for i in 2:length(t)
+        assign!(out,i,rieszneumann(u0,fiber(t)[i],s,k))
+    end
+    return out
+end
+rieszperiodic(u0,t::AbstractVector,s=2,k=rfftspace(points(u0))) = rieszperiodic(u0,TensorField(t),s,k)
+function rieszperiodic(u0,t::TensorField,s=2,k=rfftspace(points(u0)))
+    data = zeros(size(u0)...,length(t))
+    out = TensorField(base(u0)⊕base(t),data)
+    assign!(out,1,u0)
+    for i in 2:length(t)
+        assign!(out,i,rieszperiodic(u0,fiber(t)[i],s,k))
+    end
+    return out
 end
 
 function solveheat(ic,f,κ,T)
@@ -254,7 +550,7 @@ function solvestokes(pt,bc,ν=0.1,t2e=edgesindices(pt,base(bc)))
     TensorField(pt,interp(fullimmersion(bc),UV)),TensorField(FaceBundle(pt),P)
 end
 
-function solvenavierstokes(pt,pe,inbc,outbc,ν=0.001,T=range(0,1,101))
+function solvenavierstokes(pt,pe,inbc,outbc,ν=0.001,T=range(0,1,101),skip=1)
     p = fullcoordinates(pt)
     dt,nt = step(T),length(T)
     V = Cartan.varmanifold(3)(2,3)
@@ -279,14 +575,38 @@ function solvenavierstokes(pt,pe,inbc,outbc,ν=0.001,T=range(0,1,101))
     dtiM = dt*inv.(M)
     UVs = Matrix{Chain{V,1,Float64,mdims(V)}}(undef,np,nt)
     UVs[:,1] = Chain{V,1,Float64}.(zeros(np),zeros(np)) # init velocity
+    UVold = UVs[:,1]
     for l ∈ 1:nt-1
-        C = assembleconvection(pt,means(pt,UVs[:,l]),m,g)
-        UVs[:,l+1] = UVs[:,l] - ((νA+C)*UVs[:,l]).*dtiM # compute tentative velocity
-        UVs[bnd,l+1] .*= 0 # no-slip boundary totalnodes
-        UVs[ins,l+1] += inp # inflow profile totalnodes
-        P = (AR\(Bx*getindex.(UVs[:,l+1],1)+By*getindex.(UVs[:,l+1],2)))/-dt # solve PPE
-        UVs[:,l+1] -= (B*P).*dtiM # update velocity
+        C = assembleconvection(pt,means(pt,UVold),m,g)
+        UVnew = UVold - ((νA+C)*UVold).*dtiM # compute tentative velocity
+        UVnew[bnd] .*= 0 # no-slip boundary totalnodes
+        UVnew[ins] += inp # inflow profile totalnodes
+        P = (AR\(Bx*getindex.(UVnew,1)+By*getindex.(UVnew,2)))/-dt # solve PPE
+        UVnew -= (B*P).*dtiM # update velocity
+        if k==skip
+            UVs[:,l+1] -= (B*P).*dtiM # update velocity
+            k = 1
+        else
+            k += 1
+        end
     end
+    #=UVold = UVs[:,1]
+    k = 1
+    for l ∈ 1:nt-1
+        C = assembleconvection(pt,means(pt,UVold),m,g)
+        UVnew = UVold - ((νA+C)*UVold).*dtiM # compute tentative velocity
+        UVnew[bnd] .*= 0 # no-slip boundary totalnodes
+        UVnew[ins] += inp # inflow profile totalnodes
+        P = (AR\(Bx*getindex.(UVnew,1)+By*getindex.(UVnew,2)))/-dt # solve PPE
+        UVnew -= (B*P).*dtiM # update velocity
+        UVold = copy(UVnew)
+        if k==skip
+            UVs[:,l+1] = UVnew # update velocity
+            k = 1
+        else
+            k += 1
+        end
+    end=#
     return TensorField(pt⊕T,UVs)
 end
 
@@ -317,7 +637,7 @@ function solveelastic(f,e,E=1,ν=0.3)
     K,M,F = assembleelastic(f,Eν2Lame(E,ν)...)
     fixed = [2vertices(e).-1; 2vertices(e)] # boundary DoFs
     d = solvedirichlet(K,F,fixed,zeros(length(fixed)))
-    TensorField(base(f),Chain{Cartan.varmanifold(3)(2,3)}.(d[1:2:end],d[2:2:end]))
+    TensorField(base(f),Chain{affinemanifold(2)}.(d[1:2:end],d[2:2:end]))
 end
 
 function assemblemaxwell(p,e,t,κ,μ,fhat,t2e=edgesindices(p(t)),signs=facetsigns(t))
@@ -485,7 +805,7 @@ function assembleDIPG(pt,nbrs=neighbors(immersion(pt)))
     return P,S
 end
 
-function solvepoissonDIPG(f,α,β,c=1) # α = SIPG, β = penalty
+function solvepoissonDIPG(f,c,β,α=-1) # α = SIPG, β = penalty
     pt = base(f)
     m = volumes(pt)
     b = assembleload(pt,f,m)

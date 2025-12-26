@@ -79,6 +79,10 @@ struct MultistepAdaptor{o} <: AdaptiveIntegrator
     geo::Bool
 end
 
+struct LeapIntegrator{o} <: AbstractIntegrator
+    skip::Int
+end
+
 AbstractIntegrator(tol=15,int::AbstractIntegrator=ExplicitIntegrator{4}) = int(tol)
 AbstractIntegrator(tol,m,o=4) = AbstractIntegrator(tol,Val(m),Val(o))
 function AbstractIntegrator(tol,M::Val{m},B::Val{o}=Val(4)) where {m,o}
@@ -95,6 +99,7 @@ function AbstractIntegrator(tol,M::Val{m},B::Val{o}=Val(4)) where {m,o}
     end
 end
 
+LeapIntegrator{o}() where o = LeapIntegrator{o}(1)
 EulerHeunIntegrator(tol,skip=1) = EulerHeunIntegrator(tol,skip,false)
 EulerHeunIntegrator(tol::Int,skip::Int=1,geo=false) = EulerHeunIntegrator(2.0^-tol,skip,geo)
 for fun ∈ (:ExplicitIntegrator,:ExplicitAdaptor,:MultistepIntegrator,:MultistepAdaptor)
@@ -306,6 +311,8 @@ init(x0,t::TimeStep) = init(x0,step(t))
 init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
 init(x0::LocalTensor,t::TimeStep) = init(x0,step(t))
 init(x0::LocalTensor,h::T=1.0) where T = one(T)*x0
+_init(x0::LocalTensor) = init(x0)
+_init(x0) = x0
 
 export LieGroup, Flow, FlowIntegral, InitialCondition, IC
 
@@ -324,11 +331,20 @@ duration(Φ::Flow) = Φ.t
 integrator(::Flow) = ExplicitIntegrator{4}(2^-11,0)
 Base.exp(X::TensorField{B,<:Chain{V,1}} where {B,V}) = Flow(X,1.0)
 
-(Φ::Flow)(x0,i=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
-(Φ::Flow)(x0::LocalTensor,i=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
+(Φ::Flow)(x0,i::AbstractIntegrator=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
+(Φ::Flow)(x0::LocalTensor,i::AbstractIntegrator=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
 
-(Φ::Flow)(x0::LocalTensor{B,<:TensorField} where B,i=integrator(Φ)) = Φ(fiber(x0),i)
-function (Φ::Flow)(x0::TensorField,i=integrator(Φ))
+function (Φ::Flow)(x0,n::Int,i::AbstractIntegrator=integrator(Φ))
+    out = Vector{typeof(x0)}(undef,n)
+    out[1] = localfiber(x0)
+    for i ∈ 2:n
+        out[i] = localfiber(Φ(out[i-1]))
+    end
+    return out
+end
+
+(Φ::Flow)(x0::LocalTensor{B,<:TensorField} where B,i::AbstractIntegrator=integrator(Φ)) = Φ(fiber(x0),i)
+function (Φ::Flow)(x0::TensorField,i::AbstractIntegrator=integrator(Φ))
     ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
     odesolve(InitialCondition(ϕ,x0),i)
 end
@@ -349,10 +365,20 @@ integrator(Φ::FlowIntegral) = Φ.i
 
 (Φ::FlowIntegral)(x0) = Flow(Φ)(x0,integrator(Φ))
 
+function (Φ::FlowIntegral)(x0::Vector{<:Chain})
+    out1 = Φ(x0[1])
+    out = Vector{typoef(out1)}(undef,length(x0))
+    out[1] = localfiber(out1)
+    for i ∈ 2:n
+        out[i] = localfiber(Φ(x0[i]))
+    end
+    return out
+end
+
 struct InitialCondition{L<:LieGroup,X}
     Φ::L
     x0::X
-    InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,x0)
+    InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,_init(x0))
 end
 
 const IC = InitialCondition
@@ -507,6 +533,59 @@ function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) wh
     getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
 end
 
+export LeapIntegrator, LeapCondition, leap
+
+struct LeapCondition{L<:LieGroup,X,Y}
+    Φ::L
+    x0::X
+    x1::Y
+    LeapCondition(Φ::L,x0::X,x1::Y) where {L<:LieGroup,X,Y} = new{L,X,Y}(Φ,x0,x1)
+end
+
+LeapCondition(f,x0::LocalTensor,x1,tmax) = LeapCondition(Flow(f,tmax),x0,LocalTensor(zero(point(x0)),x1))
+LeapCondition(f,x0,x1::LocalTensor,tmax) = LeapCondition(Flow(f,tmax),LocalTensor(zero(point(x1)),x0),x1)
+LeapCondition(f,x0::LocalTensor,x1::LocalTensor,tmax) = LeapCondition(Flow(f,tmax),x0,x1)
+LeapCondition(f,x0,x1,dt,tmax) = LeapCondition(Flow(f,tmax),LocalTensor(-dt,x0),LocalTensor(zero(dt),x1))
+LeapCondition(f,x0,x1,dt) = LeapCondition(f,x0,x1,dt,2π)
+
+LieGroup(ic::LeapCondition) = ic.Φ
+system(ic::LeapCondition) = system(LieGroup(ic))
+duration(ic::LeapCondition) = duration(LieGroup(ic))
+parameter(ic::LeapCondition) = ic.x0
+leap(ic::LeapCondition) = ic.x1
+Base.step(ic::LeapCondition) = point(leap(ic))-point(parameter(ic))
+integrator(ic::LeapCondition) = integrator(LieGroup(ic))
+(I::AbstractIntegrator)(ic::LeapCondition) = odesolve(ic,I)
+
+function leapfrog(I::LeapIntegrator{1},fprime,vold,v,dt)
+    LocalTensor(Coordinate(point(vold)+dt), localfiber(vold)-2dt*fprime(v))
+end
+function leapfrog(I::LeapIntegrator{2},fprime,vold,v,dt)
+    LocalTensor(Coordinate(point(vold)+dt), 2localfiber(v)-localfiber(vold)+dt^2*fprime(v))
+end
+
+function odesolve(ic::LeapCondition,I::LeapIntegrator)
+    fprime = system(ic)
+    vold,v = parameter(ic),leap(ic)
+    tmin = point(v)
+    t = tmin
+    tmax = duration(ic)
+    plotgap = I.skip
+    tplot = step(ic)*plotgap
+    nplots = Int(round(tmax/tplot))
+    dt = tplot/plotgap
+    data = zeros(size(localfiber(v))...,nplots+1)
+    out = TensorField(base(localfiber(v))⊕(tmin:dt*plotgap:tmin+tmax),data)
+    assign!(out,1,localfiber(v))
+    for i in 2:nplots+1
+        for n in 1:plotgap # Stormer-Verlet
+            vold,v = v,leapfrog(I,fprime,vold,v,dt)
+        end
+        assign!(out,i,localfiber(v))
+    end
+    return out
+end
+
 function timeloop!(x,t,tmax,::Val{m}=Val(1)) where m
     if t.e < t.emin
         t.h *= 2
@@ -540,6 +619,7 @@ end
 @static if !isdefined(Base, :get_extension)
 function __init__()
     @require Makie="ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a" include("../ext/MakieExt.jl")
+    @require FFTW="7a1cc6ca-52ef-59f5-83cd-3a7055c09341" include("../ext/FFTWExt.jl")
 end
 end
 
