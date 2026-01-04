@@ -10,6 +10,8 @@
 [![Docs Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://cartan.crucialflow.com)
 [![PDF 2021](https://img.shields.io/badge/PDF-2021-blue.svg)](https://www.dropbox.com/sh/tphh6anw0qwija4/AAACiaXig5djrLVAKLPFmGV-a/Geometric-Algebra?preview=differential-geometric-algebra-2021.pdf)
 [![PDF 2025](https://img.shields.io/badge/PDF-2025-blue.svg)](https://www.dropbox.com/sh/tphh6anw0qwija4/AAACiaXig5djrLVAKLPFmGV-a/Geometric-Algebra?preview=grassmann-cartan-2025.pdf)
+[![Hardcover 2025](https://img.shields.io/badge/Hardcover-2025-blue.svg)](https://www.lulu.com/shop/michael-reed/principal-differential-geometric-algebra/hardcover/product-kv6n8j8.html)
+[![Paperback 2025](https://img.shields.io/badge/Paperback-2025-blue.svg)](https://www.lulu.com/shop/michael-reed/principal-differential-geometric-algebra/paperback/product-yvk7zqr.html)
 [![Gitter](https://badges.gitter.im/Grassmann-jl/community.svg)](https://gitter.im/Grassmann-jl/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 [![Build Status](https://travis-ci.org/chakravala/Adapode.jl.svg?branch=master)](https://travis-ci.org/chakravala/Adapode.jl)
 
@@ -282,6 +284,8 @@ wireframe!(ps)
 
 ## References
 
-* Michael Reed, [Foundatons of differential geometric algebra](https://vixra.org/abs/2304.0228) (2021)
+* Michael Reed, [Foundations of differential geometric algebra](https://vixra.org/abs/2304.0228) (2021)
 * Michael Reed, [Differential geometric algebra: compute using Grassmann.jl and Cartan.jl](https://www.dropbox.com/sh/tphh6anw0qwija4/AAACiaXig5djrLVAKLPFmGV-a/Geometric-Algebra?preview=grassmann-cartan-2025.pdf) (2025)
+* Michael Reed, [Principal Differential Geometric Algebra: compute using Grassmann.jl, Cartan.jl](https://www.lulu.com/shop/michael-reed/principal-differential-geometric-algebra/hardcover/product-kv6n8j8.html) (Hardcover, 2025)
+* Michael Reed, [Principal Differential Geometric Algebra: compute using Grassmann.jl, Cartan.jl](https://www.lulu.com/shop/michael-reed/principal-differential-geometric-algebra/paperback/product-yvk7zqr.html) (Paperback, 2025)
 
