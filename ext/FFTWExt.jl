@@ -79,7 +79,7 @@ for fun ∈ (:heat,:restwave,:biharmonic)
             out = TensorField(base(u0)⊕base(t),data)
             Adapode.assign!(out,1,u0)
             for i in 2:length(t)
-                Adapode.assign!(out,i,heatdirichlet(u0,fiber(t)[i],k))
+                Adapode.assign!(out,i,$dfun(u0,fiber(t)[i],k))
             end
             return out
         end

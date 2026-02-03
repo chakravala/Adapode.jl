@@ -1,7 +1,7 @@
 name = "Adapode"
 uuid = "0750cfb5-909a-49d7-927e-29b6595444bf"
 authors = ["Michael Reed"]
-version = "0.3.12"
+version = "0.3.13"
 
 [deps]
 Requires = "ae029012-a4dd-5104-9daa-d747884805df"
