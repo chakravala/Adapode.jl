@@ -17,6 +17,9 @@
 
 This project originally started as a FORTRAN 95 project called [adapode](https://github.com/chakravala/adapode) and evolved with [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) and [Cartan.jl](https://github.com/chakravala/Cartan.jl).
 
+*Adapode.jl* is an extension to the *Cartan.jl* package with support for solving ordinary differential equations and partial differential equations.
+It has various types of time-stepping methods (including multistep and adaptive), spectral element methods, and finite element methods.
+
 *Cartan.jl* introduces a pioneering unified numerical framework for comprehensive differential geometric algebra, purpose-built for the formulation and solution of partial differential equations on manifolds with non-trivial topological structure and [Grassmann.jl](https://github.com/chakravala/Grassmann.jl) algebra.
 Written in Julia, [Cartan.jl](https://github.com/chakravala/Cartan.jl) unifies differential geometry, geometric algebra, and tensor calculus with support for fiber product topology; enabling directly executable generalized treatment of geometric PDEs over grids, meshes, and simplicial decompositions.
 
@@ -143,6 +146,88 @@ x1 = start.(TorusParameter(180));
 darios(t,dt=tangent(fiber(t))) = hodge(wedge(dt,tangent(dt)))
 sol = odesolve(darios,x1,1.0,2^-11)
 mesh(sol,normalnorm)
+```
+
+Other kinds of solvers include the `LeapIntegrator` applied on a `LeapCondition` specification of first or second order.
+```julia
+fprime(v) = dirichlet!(laplacian_chebyshevfft(v))
+function leapfrog(u0,N=25,tmax=1,tplot=1/3)
+    dt = 6/(N-1)^2
+    lc = LeapCondition(fprime,u0,u0,dt,tmax)
+    odesolve(lc,LeapIntegrator{2}(Int(round(tplot/dt))))
+end
+```
+Example with initial `LeapCondition` at rest:
+```julia
+x = Chebyshev(41)
+XY = TensorField(ProductSpace{2}(x,x))
+X,Y = split(XY)
+ex = exp(-40((X-0.4)^2+Y^2))
+lf = leapfrog(ex,41,4,1/30)
+contour(lf,alpha=0.03) # previous page figure
+surface(lf[:,:,10]) # 10 or 20, 30, 60, 70, 80
+```
+This same method generalizes to higher dimensions also:
+```julia
+x = Chebyshev(31)
+XYZ = TensorField(ProductSpace{3}(x,x,x))
+X,Y,Z = split(XYZ)
+ex = exp(-40((X-0.4)^2+Y^2+(Z-0.7)^2))
+lf = leapfrog(ex,31,2,1/30)
+contour(lf[:,:,:,10],alpha=0.02,levels=5)
+```
+
+## Spectral element methods
+
+Based on the `Cartan` interoperability with multidimensional `FFTW`, there are several PDE solvers based on Dirichlet, Neumann, or periodic boundary conditions for the wave/heat/biharmonic/Riesz/Laplace differential operator.
+A comprehensive list of such methods has been fully implemented, here are a few fundamental examples:
+```julia
+x = TensorField(0:0.01:pi)
+lines(wavedirichlet(0*x,x*(1+cos(x)),0.4))#1.2,1.7,2.6,3.5,4.3
+surface(wavedirichlet(0*x,x*(1+cos(x)),0:0.01:2pi))
+lines(waveneumann(0*x,x*(1+cos(x)),0.4))#1.2,1.7,2.6,3.5,4.3
+surface(waveneumann(0*x,x*(1+cos(x)),0:0.01:2pi))
+lines(waveperiodic(0*x,x*(1+cos(x)),0.4))#1.2,1.7,2.6,3.5,4.3
+surface(waveperiodic(0*x,x*(1+cos(x)),0:0.01:2pi))
+```
+```julia
+XY = TensorField(ProductSpace(0:0.01:pi,0:0.01:pi))
+fun(x) = exp(-100((x[1]-1)^2+(x[2]-0.7)^2))
+surface(restwavedirichlet(2fun.(XY),2.1))
+surface(restwavedirichlet(2fun.(XY),3.1))
+surface(restwaveneumann(2fun.(XY),2.1))
+surface(restwaveneumann(2fun.(XY),3.1))
+surface(restwaveperiodic(2fun.(XY),2.1))
+surface(restwaveperiodic(2fun.(XY),3.1))
+```
+```julia
+XYZ = TensorField(ProductSpace(0:0.05:pi,0:0.05:pi,0:0.05:pi))
+fun(x) = exp(-100((x[1]-1)^2+(x[2]-0.7)^2+(x[3]-2)^2))
+contour(restwavedirichlet(2fun.(XYZ),2.1),alpha=0.2,levels=5)
+contour(restwavedirichlet(2fun.(XYZ),3.1),alpha=0.2,levels=5)
+contour(restwaveneumann(2fun.(XYZ),2.1),alpha=0.02,levels=4)
+contour(restwaveneumann(2fun.(XYZ),3.1),alpha=0.02,levels=4)
+contour(restwaveperiodic(2fun.(XYZ),2.1),alpha=0.02,levels=7)
+contour(restwaveperiodic(2fun.(XYZ),3.1),alpha=0.1,levels=7)
+```
+```julia
+x = TensorField(-1:0.01:1)
+lines(heatdirichlet(box.(x),0.001)) #0.005,0.01,0.05,0.1,0.5,1
+lines(heatneumann(box.(x),0.001)) #0.005,0.01,0.05,0.1,0.5,1
+surface(heatdirichlet(box.(x),0:0.01:1))
+surface(heatneumann(box.(x),0:0.01:1))
+lines(heatperiodic(sin(pi*x)+2,0.001)) #0.005,0.01,0.05,0.1,
+lines(heatneumann(sin(pi*x)+2,0.001)) #0.005,0.01,0.05,0.1,0.5
+```
+```julia
+XY = TensorField(ProductSpace(-1:0.01:1,-1:0.01:1))
+surface(heatdirichlet(box.(XY),0.01))
+surface(heatdirichlet(box.(XY),0.1))
+```
+```julia
+XYZ = TensorField(ProductSpace(-1:0.05:1,-1:0.05:1,-1:0.05:1))
+contour(heatdirichlet(box.(XYZ),0.05),alpha=0.03)
+contour(heatdirichlet(box.(XYZ),0.5),alpha=0.03)
 ```
 
 ## Finite element methods
