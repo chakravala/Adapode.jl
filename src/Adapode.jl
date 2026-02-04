@@ -204,19 +204,19 @@ function predictcorrect(x,f,fx,t,::Val{1})
     fiber(xti)+h*localfiber(f((point(xti)+h)↦(fiber(xti)+h*localfiber(f(xti)))))
 end
 
-initsteps(x0,t,tmax,m) = initsteps(init(x0,t),t,tmax,m)
-initsteps(x0,t,tmax,f,m,B) = initsteps(init(x0),t,tmax,f,m,B)
-function initsteps(x0::LocalTensor,t,tmax,::Val{m}) where m
+initsteps(x0,t,tmax,m,bc=identity) = initsteps(init(x0,t),t,tmax,m,bc)
+initsteps(x0,t,tmax,f,m,B,bc=identity) = initsteps(init(x0),t,tmax,f,m,B,bc)
+function initsteps(x0::LocalTensor,t,tmax,::Val{m},bc=identity) where m
     tmin,f0 = base(x0),fiber(x0)
     n = Int(round((tmax-tmin)/step(t)/t.skip))+1
     t = m ? (tmin:step(t)*t.skip:tmax) : Vector{typeof(t.h)}(undef,n)
     (!m) && (t[1] = tmin)
     x = Array{fibertype(fibertype(x0)),ndims(f0)+1}(undef,size(f0)...,m ? length(t) : n)
-    assign!(x,1,fiber(f0))
+    assign!(x,1,bc(fiber(f0)))
     return TensorField(ndims(f0) > 0 ? base(f0)×t : t,x)
 end
-function initsteps(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4)) where o
-    x = initsteps(x0,t,tmax,m)
+function initsteps(x0::LocalTensor,t,tmax,f,m,B::Val{o}=Val(4),bc=identity) where o
+    x = initsteps(x0,t,tmax,m,bc)
     xi = extract(x,1)
     fx = if Base.isbitstype(fibertype(xi))
         Variables{o+1,fibertype(xi)}(undef)
@@ -397,37 +397,38 @@ odesolve(f,x0,tmax,tol,m,o=4) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
 function odesolve(f,x0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     odesolve(InitialCondition(f,x0,tmax),AbstractIntegrator(tol,M,B))
 end
-function odesolve(ic::InitialCondition,I::EulerHeunIntegrator)
+function odesolve(ic::InitialCondition,I::EulerHeunIntegrator,bc=identity)
     t = TimeStep(I)
-    x = initsteps(parameter(ic),t,duration(ic),Val(true))
+    x = initsteps(parameter(ic),t,duration(ic),Val(true),bc)
     for i ∈ 2:size(x)[end]
-        assign!(x,i,heun(extract(x,i-1),system(ic),step(t)))
+        assign!(x,i,bc(heun(extract(x,i-1),system(ic),step(t))))
     end
     return x
 end
-function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o}) where o
+function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o},bc=identity) where o
     t,B = TimeStep(I),Val(o)
     stp = step(t)
     if iszero(I.skip) # don't allocate
         xi = init(parameter(ic),t)
+        xi = LocalTensor(base(xi),bc(fiber(xi)))
         n = Int(round((duration(ic)-point(xi))/stp))
         for i ∈ 2:abs(n)+1
-            xi = LocalTensor(point(xi)+sign(n)*stp,explicit(xi,system(ic),sign(n)*stp,B))
+            xi = LocalTensor(point(xi)+sign(n)*stp,bc(explicit(xi,system(ic),sign(n)*stp,B)))
         end
         return xi
     elseif isone(I.skip) # full allocations
-        x = initsteps(parameter(ic),t,duration(ic),Val(true))
+        x = initsteps(parameter(ic),t,duration(ic),Val(true),bc)
         for i ∈ 2:size(x)[end]
-            assign!(x,i,explicit(extract(x,i-1),system(ic),stp,B))
+            assign!(x,i,bc(explicit(extract(x,i-1),system(ic),stp,B)))
         end
         return x
     else # skip some allocations
-        x = initsteps(parameter(ic),t,duration(ic),Val(true))
+        x = initsteps(parameter(ic),t,duration(ic),Val(true),bc)
         skip = list(1,I.skip)
         for i ∈ 2:size(x)[end]
             xi = extract(x,i-1)
             for i ∈ skip
-                xi = LocalTensor(point(xi)+stp,explicit(xi,system(ic),stp,B))
+                xi = LocalTensor(point(xi)+stp,bc(explicit(xi,system(ic),stp,B)))
             end
             assign!(x,i,fiber(xi))
         end
@@ -442,32 +443,33 @@ function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
     end
     return resize(x)
 end
-function odesolve(ic::InitialCondition,I::MultistepIntegrator{o}) where o
+function odesolve(ic::InitialCondition,I::MultistepIntegrator{o},bc=identity) where o
     t,B = TimeStep(I.tol),Val(o)
     stp = step(t)
     if iszero(I.skip) # don't allocate
         xi = init(parameter(ic),t)
+        xi = LocalTensor(base(xi),bc(fiber(xi)))
         fx = Variables{o+1,fibertype(xi)}(undef)
         n = Int(round((duration(ic)-point(xi))/stp))
         pxi = point(xi)+(o-1)*sign(n)*stp
         for i ∈ o+1:abs(n)+1 # o+1 changed to o
-            xi = LocalTensor(pxi+sign(n)*stp,predictcorrect(xi,system(ic),fx,t,B))
+            xi = LocalTensor(pxi+sign(n)*stp,bc(predictcorrect(xi,system(ic),fx,t,B)))
             pxi = point(xi)
         end
         return xi
     elseif isone(I.skip) # full allocations
-        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
+        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B,bc)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
-            assign!(x,i,fiber(predictcorrect(x,system(ic),fx,t,B)))
+            assign!(x,i,bc(fiber(predictcorrect(x,system(ic),fx,t,B))))
         end
         return x
     else # skip some allocations
-        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B)
+        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B,bc)
         skip = list(1,I.skip)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
             xi = extract(x,i-1)
             for j ∈ skip
-                xi = LocalTensor(point(xi)+stp,predictcorrect(xi,system(ic),fx,t,B))
+                xi = LocalTensor(point(xi)+stp,bc(predictcorrect(xi,system(ic),fx,t,B)))
             end
             assign!(x,i,fiber(xi))
         end
@@ -527,6 +529,7 @@ geodesic(Γ,x0,v0) = GeodesicCondition(Γ,x0,v0,2π)
 geodesic(Γ,x0,v0,tmax::AbstractReal) = InitialCondition(geodesic(Γ),Chain(x0,v0),tmax)
 const Geodesic,GeodesicCondition = geodesic,geodesic,geodesic
 
+geosolve(ic::InitialCondition,i::AbstractIntegrator,bc) = getindex.(odesolve(ic,i,bc),1)
 geosolve(ic::InitialCondition,i::AbstractIntegrator=integrator(ic)) = getindex.(odesolve(ic,i),1)
 geosolve(Γ,x0,v0,tmax,tol,m,o=4) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
@@ -557,14 +560,14 @@ Base.step(ic::LeapCondition) = point(leap(ic))-point(parameter(ic))
 integrator(ic::LeapCondition) = integrator(LieGroup(ic))
 (I::AbstractIntegrator)(ic::LeapCondition) = odesolve(ic,I)
 
-function leapfrog(I::LeapIntegrator{1},fprime,vold,v,dt)
-    LocalTensor(Coordinate(point(vold)+dt), localfiber(vold)-2dt*fprime(v))
+function leapfrog(I::LeapIntegrator{1},fprime,vold,v,dt,bc=identity)
+    LocalTensor(Coordinate(point(vold)+dt), bc(localfiber(vold)-2dt*fprime(v)))
 end
-function leapfrog(I::LeapIntegrator{2},fprime,vold,v,dt)
-    LocalTensor(Coordinate(point(vold)+dt), 2localfiber(v)-localfiber(vold)+dt^2*fprime(v))
+function leapfrog(I::LeapIntegrator{2},fprime,vold,v,dt,bc=identity)
+    LocalTensor(Coordinate(point(vold)+dt), bc(2localfiber(v)-localfiber(vold)+dt^2*fprime(v)))
 end
 
-function odesolve(ic::LeapCondition,I::LeapIntegrator)
+function odesolve(ic::LeapCondition,I::LeapIntegrator,bc=identity)
     fprime = system(ic)
     vold,v = parameter(ic),leap(ic)
     tmin = point(v)
@@ -576,10 +579,10 @@ function odesolve(ic::LeapCondition,I::LeapIntegrator)
     dt = tplot/plotgap
     data = zeros(size(localfiber(v))...,nplots+1)
     out = TensorField(base(localfiber(v))⊕(tmin:dt*plotgap:tmin+tmax),data)
-    assign!(out,1,localfiber(v))
+    assign!(out,1,bc(localfiber(v)))
     for i in 2:nplots+1
         for n in 1:plotgap # Stormer-Verlet
-            vold,v = v,leapfrog(I,fprime,vold,v,dt)
+            vold,v = v,leapfrog(I,fprime,vold,v,dt,bc)
         end
         assign!(out,i,localfiber(v))
     end
