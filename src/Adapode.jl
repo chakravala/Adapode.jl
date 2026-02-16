@@ -536,6 +536,37 @@ function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) wh
     getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
 end
 
+export fixedpoint, fixedpointerror, errornorm
+
+errornorm(a::Number,b::Number,ϵ=5eps()) = norm(a-b)
+errornorm(a::TensorField,b::TensorField,ϵ=5eps()) = norm(fiber(a-b),Inf)
+fixedpointerror(f,x,ϵ=5eps()) = fixedpoint(f,x,ϵ,Val(true))
+fixedpoint(f,x,n::Int) = fixedpoint(f,x,1:n)
+function fixedpoint(f,x,n::AbstractVector{Int},::Val{print}=Val(false)) where print
+    print && (out = zeros(length(n)))
+    for i ∈ n
+        if print
+            xi = f(x)
+            out[i] = errornorm(xi,x)
+            x = xi
+        else
+            x = f(x)
+        end
+    end
+    return print ? (x,out) : x
+end
+function fixedpoint(f,x,ϵ=5eps(),::Val{print}=Val(false)) where print
+    change = 5ϵ
+    print && (out = Float64[])
+    while change > ϵ
+        xi = f(x)
+        change = errornorm(xi,x)
+        print && push!(out,change)
+        x = xi
+    end
+    return print ? (x,out) : x
+end
+
 export LeapIntegrator, LeapCondition, leap
 
 struct LeapCondition{L<:LieGroup,X,Y}
