@@ -388,6 +388,8 @@ biharmonicmultiplier(k,t) = exp(-t*Real(abs2(k))^2)
 schrodingermultiplier(k,t) = exp((-im/2)*t*Real(abs2(k)))
 #heatkernel(u0,t,k=r2rspace(points(u0))) = idct(heatmultiplier.(k,t))
 
+multiplierstep(multiplier,k,t) = (multiplier(k,t)-1)/t
+
 function rieszdirichlet end
 function wavedirichlet end
 
@@ -497,16 +499,10 @@ function rieszperiodic(u0,t::TensorField,s=2,k=rfftspace(points(u0)))
 end
 
 function solveheat(ic,f,κ,T)
-    m,h = length(T),step(T)
-    out = zeros(length(ic),m)
-    out[:,1] = fiber(ic) # initial condition
     A = assemblestiffness(base(ic)) # assemble(p(t),1,f)
     M,b = assemblemassload(f).+assemblerobin(κ)
-    LHS = M+h*A # time step
-    for l ∈ 1:m-1
-        out[:,l+1] = LHS\(M*out[:,l]+h*b); #l%10==0 && println(l*h)
-    end
-    TensorField(base(ic)⊕T,out)
+    LHS,hb = M+step(T)*A,step(T)*b # time step
+    orbit(x -> LHS\(M*fiber(x)+hb),ic,T)
 end
 
 function solvewave(pt,bc) # Crank-Nicolson
@@ -699,58 +695,79 @@ function solvenonlinearpoisson(f,pe,Afcn)
     pt = SimplexBundle(base(f))
     m = volumes(pt)
     g = gradienthat(pt,m)
-    ξ = zeros(nodes(immersion(f)))
-    for k ∈ list(1,5) # non-linear loop
-        J,r = assemblejacobianresidue(f,pe,ξ,Afcn,m,g)
-        d = J\r
-        ξ += d # update solution by solving correction
+    ξ = TensorField(pt,zeros(nodes(immersion(f))))
+    function fun(ξ)
+        J,r = assemblejacobianresidue(f,pe,fiber(ξ),Afcn,m,g)
+        d = J\r # update solution by solving correction
         println("|d|=$(norm(d)), |r|=$(norm(r))")
+        TensorField(ξ,fiber(ξ) + d)
     end
-    TensorField(pt,ξ)
+    orbit(fun,ξ,Values(1,2,3,4,5))
 end
 
 function solvebistable(ic,ϵ=0.01,T=StepRangeLen(0,0.1,101),f=u->u-u^3)
     dt = step(T)
-    ξ = zeros(length(ic),length(T))
-    ξ[:,1] = fiber(ic) # IC
-    ξ_new = ξ[:,1]
     A,M = assemble(base(ic))
-    for l ∈ 1:length(T)-1 # time loop
-        for k ∈ list(1,3) # non-linear loop
+    fun(ξ) = last(orbithold(fun,fiber(ξ),Values(1,2,3)))
+    fun(ξ,ξ_tmp) = (M+(dt*ϵ)*A)\(M*fiber(ξ)+dt*(M*f.(ξ_tmp)))
+    orbit(fun,ic,T)
+end
+#=function solvebistable(ic,ϵ=0.01,T=StepRangeLen(0,0.1,101),f=u->u-u^3)
+    dt = step(T)
+    A,M = assemble(base(ic))
+    function fun(ξ)
+        ξ_new = fiber(ξ)
+        for k ∈ Values(1,2,3) # non-linear loop
             ξ_tmp = ξ_new
-            ξ_new = (M+(dt*ϵ)*A)\(M*ξ[:,l]+dt*(M*f.(ξ_tmp)))
+            ξ_new = (M+(dt*ϵ)*A)\(M*fiber(ξ)+dt*(M*f.(ξ_tmp)))
             #fixpterror = norm(ξ_tmp-ξ_new)
         end
-        ξ[:,l+1] = ξ_new
+        return ξ_new
     end
-    TensorField(base(ic)⊕T,ξ)
-end
+    orbit(fun,ic,T)
+end=#
 
 function solvebistable_newton(ic,ϵ=0.01,T=StepRangeLen(0,0.1,101),f=u->u-u^3,df=u->1-3u^2)
     dt = step(T)
     np = length(ic)
     t = immersion(ic)
-    ξ = zeros(length(ic),length(T))
-    ξ[:,1] = fiber(ic) # IC
-    ξ_new = ξ[:,1]
     m = volumes(base(ic))
     g = gradienthat(base(ic),m)
     A,M = assemble(base(ic),1,1,0,m,g)
-    for l ∈ 1:length(T)-1 # time loop
-        for k ∈ Cartan.list(1,3) # non-linear loop
+    fun(ξ) = last(orbithold(fun,fiber(ξ),Values(1,2,3)))
+    function fun(ξ,ξ_tmp)
+        ξ_tmp_mid = means(immersion(ic),ξ_tmp)
+        Mdf,b = assemblemassload(base(ic),f.(ξ_tmp),df.(ξ_tmp_mid).*fiber(m),m)
+        MA = M+(dt*ϵ)*A
+        J = MA - dt*Mdf # Jacobian
+        ρ = MA*ξ_tmp - M*fiber(ξ) - dt*b # residual
+        ξ_tmp - J\ρ # Newton update
+    end
+    orbit(fun,ic,T)
+end
+#=function solvebistable_newton(ic,ϵ=0.01,T=StepRangeLen(0,0.1,101),f=u->u-u^3,df=u->1-3u^2)
+    dt = step(T)
+    np = length(ic)
+    t = immersion(ic)
+    m = volumes(base(ic))
+    g = gradienthat(base(ic),m)
+    A,M = assemble(base(ic),1,1,0,m,g)
+    function fun(ξ)
+        ξ_new = fiber(ξ)
+        for k ∈ Values(1,2,3) # non-linear loop
             ξ_tmp = ξ_new
             ξ_tmp_mid = means(immersion(ic),ξ_tmp)
             Mdf,b = assemblemassload(base(ic),f.(ξ_tmp),df.(ξ_tmp_mid).*fiber(m),m)
             MA = M+(dt*ϵ)*A
             J = MA - dt*Mdf # Jacobian
-            ρ = MA*ξ_new - M*ξ[:,l] - dt*b # residual
+            ρ = MA*ξ_new - M*fiber(ξ) - dt*b # residual
             ξ_new = ξ_tmp - J\ρ # Newton update
             #error = norm(ξ_tmp-ξ_new)
         end
-        ξ[:,l+1] = ξ_new
+        return ξ_new
     end
-    TensorField(base(ic)⊕T,ξ)
-end
+    orbit(fun,ic,T)
+end=#
 
 function gradienthat(ip::Simplex) # ip is already inverse of the point Simplex
     TensorOperator(Chain{Manifold(ip)}(Cartan.affmanifold(2).(value(transpose(ip)))))

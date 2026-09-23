@@ -35,6 +35,7 @@ export MeshFunction, GradedField, QuaternionField # PhasorField
 export LocalTensor, FiberBundle, AbstractFiber
 export base, fiber, domain, codomain, ↦, →, ←, ↤, basetype, fibertype
 export ProductSpace, RealRegion, Interval, Rectangle, Hyperrectangle, ⧺, ⊕
+export Limit, orbit, orbithold, orbiterror, residual, supnorm
 
 include("constants.jl")
 include("element.jl")
@@ -134,6 +135,91 @@ function checkstep!(t)
     return t
 end
 
+export LieGroup, Flow, FlowApprox, FlowIntegral, InitialCondition, IC
+
+abstract type LieGroup{F} end
+
+struct Flow{F,N} <: LieGroup{F}
+    f::F
+    t::Float64
+    Flow{F,N}(f,t) where {F,N} = new{F,N}(f,t)
+    Flow(f::F,t::Float64) where F = new{F,1}(f,t)
+end
+
+const FlowApprox{F} = Flow{F,2}
+FlowApprox(f::F,t::Float64) where F = Flow{F,2}(f,t)
+
+Flow(f::Flow) = f
+Flow(f) = Flow(f,2π)
+Flow(f,t::Real) = Flow(f,float(t))
+system(Φ::Flow) = Φ.f
+duration(Φ::Flow) = Φ.t
+integrator(::Flow) = ExplicitIntegrator{4}(2^-11,0)
+Base.exp(X::TensorField{B,<:Chain{V,1}} where {B,V}) = Flow(X,1.0)
+
+(Φ::Flow)(x0,i::AbstractIntegrator=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
+(Φ::Flow)(x0::LocalTensor,i::AbstractIntegrator=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
+
+function (Φ::Flow)(x0,n::Int,i::AbstractIntegrator=integrator(Φ))
+    out = Vector{typeof(x0)}(undef,n)
+    out[1] = localfiber(x0)
+    for i ∈ 2:n
+        out[i] = localfiber(Φ(out[i-1]))
+    end
+    return out
+end
+
+(Φ::Flow)(x0::LocalTensor{B,<:TensorField} where B,i::AbstractIntegrator=integrator(Φ)) = Φ(fiber(x0),i)
+function (Φ::Flow)(x0::TensorField,i::AbstractIntegrator=integrator(Φ))
+    ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
+    odesolve(InitialCondition(ϕ,x0),i)
+end
+
+struct FlowIntegral{F,I<:AbstractIntegrator,N} <: LieGroup{F}
+    Φ::Flow{F,N}
+    i::I
+    FlowIntegral(Φ::Flow{F,N},i::I=integrator(Φ)) where {F,N,I<:AbstractIntegrator} = new{F,I,N}(Φ,i)
+end
+
+FlowIntegral(f,tmax,i=ExplicitIntegrator{4}(2^-11)) = FlowIntegral(Flow(f,tmax),i)
+FlowIntegral(f) = FlowIntegral(f,2π)
+
+Flow(Φ::FlowIntegral) = Φ.Φ
+system(Φ::FlowIntegral) = system(Flow(Φ))
+duration(Φ::FlowIntegral) = duration(Flow(Φ))
+integrator(Φ::FlowIntegral) = Φ.i
+
+(Φ::FlowIntegral)(x0) = Flow(Φ)(x0,integrator(Φ))
+
+function (Φ::FlowIntegral)(x0::Vector{<:Chain})
+    out1 = Φ(x0[1])
+    out = Vector{typoef(out1)}(undef,length(x0))
+    out[1] = localfiber(out1)
+    for i ∈ 2:n
+        out[i] = localfiber(Φ(x0[i]))
+    end
+    return out
+end
+
+struct InitialCondition{L<:LieGroup,X}
+    Φ::L
+    x0::X
+    InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,_init(x0))
+end
+
+const IC = InitialCondition
+InitialCondition(f,x0,tmax) = InitialCondition(Flow(f,tmax),x0)
+InitialCondition(f,x0) = InitialCondition(f,x0,2π)
+
+LieGroup(ic::InitialCondition) = ic.Φ
+system(ic::InitialCondition) = system(LieGroup(ic))
+duration(ic::InitialCondition) = duration(LieGroup(ic))
+parameter(ic::InitialCondition) = ic.x0
+integrator(ic::InitialCondition) = integrator(LieGroup(ic))
+(I::AbstractIntegrator)(ic::InitialCondition) = odesolve(ic,I)
+
+
+
 function weights(c,fx)
     @inbounds cfx = c[1]*fx[1]
     for k ∈ 2:length(c)
@@ -152,9 +238,14 @@ function explicit(x,h,c,fx,i)
     l,m = length(c),length(fx)
     weights(h*c,fx[shift(Val(m),Val(l),i+(m-l))])
 end
+heun(x,f::Flow,h) = heun(x,system(f),h)
 function heun(x,f::Function,h)
     hfx = h*localfiber(f(x))
     fiber(x)+(hfx+h*fiber(f((point(x)+h)↦(fiber(x)+hfx))))/2
+end
+function heun(x,f::FlowApprox,h)
+    hfx = h*localfiber(f(x,h))
+    fiber(x)+(hfx+h*fiber(f((point(x)+h)↦(fiber(x)+hfx),h)))/2
 end
 function heun(x,f::TensorField,h)
     hfx = h*localfiber(f(x))
@@ -168,6 +259,22 @@ end
 
 @pure butcher(::Val{N},::Val{A}=Val(false)) where {N,A} = A ? CBA[N] : CB[N]
 @pure blength(n::Val{N},a::Val{A}=Val(false)) where {N,A} = Val(length(butcher(n,a))-A)
+
+function butcher(x::LocalTensor{B,F},Φ::FlowApprox,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
+    b = butcher(v,a)
+    n = length(b)-A
+    f = system(Φ)
+    # switch to isbits(F)
+    fx = F<:AbstractArray ? FixedVector{n,F}(undef) : Variables{n,F}(undef)
+    @inbounds fx[1] = localfiber(f(x,h))
+    for k ∈ 2:n
+        @inbounds fx[k] = localfiber(f((point(x)+h*sum(b[k-1]))↦explicit(x,h,b[k-1],fx),h))
+    end
+    return fx
+end
+function butcher(x::LocalTensor{B,F},f::Flow,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
+    butcher(x,system(f),h,v,a)
+end
 function butcher(x::LocalTensor{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) where {N,A,B,F}
     b = butcher(v,a)
     n = length(b)-A
@@ -179,13 +286,20 @@ function butcher(x::LocalTensor{B,F},f,h,v::Val{N}=Val(4),a::Val{A}=Val(false)) 
     end
     return fx
 end
-explicit(x,f::Function,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
-explicit(x,f::Function,h,::Val{1}) = fiber(x)+h*localfiber(f(x))
-explicit(x,f::TensorField,h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
-explicit(x,f::TensorField,h,::Val{1}) = fiber(x)+h*localfiber(f(x))
+explicit(x,f::Union{<:Flow,<:FlowApprox,<:Function,<:TensorField},h,b::Val=Val(4)) = explicit(x,h,butcher(b)[end],butcher(x,f,h,b))
+explicit(x,f::Union{<:Function,<:TensorField},h,::Val{1}) = fiber(x)+h*localfiber(f(x))
+explicit(x,f::Flow,h,v::Val{1}) = explicit(x,system(f),h,v)
+explicit(x,f::FlowApprox,h,::Val{1}) = fiber(x)+h*localfiber(system(f)(x,h))
 
+function multistep!(x,f::Flow,fx,t,k::Val=Val(4),pc::Val=Val(false))
+    multistep!(x,system(f),fx,t,k,pc)
+end
 function multistep!(x,f,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
     fx[t.s] = localfiber(f(x))
+    explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
+end # more accurate compared with CAB[k] methods
+function multistep!(x,f::FlowApprox,fx,t,::Val{k}=Val(4),::Val{PC}=Val(false)) where {k,PC}
+    fx[t.s] = localfiber(system(f)(x,h))
     explicit(x,t.h,PC ? CAM[k] : CAB[k],fx,t.s)
 end # more accurate compared with CAB[k] methods
 function predictcorrect(x,f,fx,t,k::Val{m}=Val(4)) where m
@@ -201,6 +315,14 @@ function predictcorrect(x,f,fx,t,::Val{1})
     xti = extract(x,t.i)
     t.i += 1
     h = step(t)
+    fiber(xti)+h*localfiber(f((point(xti)+h)↦(fiber(xti)+h*localfiber(f(xti)))))
+end
+predictcorrect(x,f::Flow,fx,t,o::Val{1}) = predictcorrect(x,system(f),fx,t,o)
+function predictcorrect(x,Φ::FlowApprox,fx,t,::Val{1})
+    xti = extract(x,t.i)
+    t.i += 1
+    h = step(t)
+    f = system(Φ)
     fiber(xti)+h*localfiber(f((point(xti)+h)↦(fiber(xti)+h*localfiber(f(xti)))))
 end
 
@@ -273,6 +395,33 @@ function initsteps!(x,f,fx,t,B::Val=Val(4))
     t.s = 1+m
     t.i += m
 end
+function initsteps!(x::LocalTensor,f::Flow,fx,t,B::Val=Val(4))
+    initsteps!(x,system(f),fx,t,B)
+end
+function initsteps!(x,f::Flow,fx,t,B::Val=Val(4))
+    initsteps!(x,system(f),fx,t,B)
+end
+function initsteps!(x::LocalTensor,f::FlowApprox,fx,t,B::Val=Val(4))
+    m = length(fx)-2
+    xi = x
+    for j ∈ 1:m
+        @inbounds fx[j] = localfiber(f(xi,h))
+        xi = (point(xi)+step(t)) ↦ explicit(xi,f,step(t),B)
+    end
+    t.s = 1+m
+    t.i += m
+end
+function initsteps!(x,f::FlowApprox,fx,t,B::Val=Val(4))
+    m = length(fx)-2
+    xi = extract(x,t.i)
+    for j ∈ 1:m
+        @inbounds fx[j] = localfiber(f(xi,h))
+        xi = (point(xi)+step(t)) ↦ explicit(xi,f,step(t),B)
+        assign!(x,t.i+j,fiber(xi))
+    end
+    t.s = 1+m
+    t.i += m
+end
 
 function explicit!(x,f,t,B=Val(5))
     resize!(x,t.i,10000)
@@ -306,6 +455,17 @@ function predictcorrect!(x,f,fx,t,::Val{1})
     assign!(x,t.i,tn ↦ c)
     t.e = maximum(abs.(value(c-p)./value(c)))
 end
+predictcorrect!(x,f::Flow,fx,t,o::Val{1}) = predictcorrect!(x,system(f),fx,t,o)
+function predictcorrect!(x,f::FlowApprox,fx,t,::Val{1})
+    xti = extract(x,t.i)
+    xi,tn = fiber(xti),point(xti)+step(t)
+    p = xi + step(t)*localfiber(f(xti,h))
+    c = xi + step(t)*localfiber(f(tn↦p,h))
+    t.i += 1
+    resize!(x,t.i,10000)
+    assign!(x,t.i,tn ↦ c)
+    t.e = maximum(abs.(value(c-p)./value(c)))
+end
 
 init(x0,t::TimeStep) = init(x0,step(t))
 init(x0,h::T=1.0) where T = 0.0 ↦ one(T)*x0
@@ -313,84 +473,6 @@ init(x0::LocalTensor,t::TimeStep) = init(x0,step(t))
 init(x0::LocalTensor,h::T=1.0) where T = one(T)*x0
 _init(x0::LocalTensor) = init(x0)
 _init(x0) = x0
-
-export LieGroup, Flow, FlowIntegral, InitialCondition, IC
-
-abstract type LieGroup{F} end
-
-struct Flow{F} <: LieGroup{F}
-    f::F
-    t::Float64
-end
-
-Flow(f::Flow) = f
-Flow(f) = Flow(f,2π)
-Flow(f,t::Real) = Flow(f,float(t))
-system(Φ::Flow) = Φ.f
-duration(Φ::Flow) = Φ.t
-integrator(::Flow) = ExplicitIntegrator{4}(2^-11,0)
-Base.exp(X::TensorField{B,<:Chain{V,1}} where {B,V}) = Flow(X,1.0)
-
-(Φ::Flow)(x0,i::AbstractIntegrator=MultistepIntegrator{4}(2^-11,0)) = odesolve(InitialCondition(Φ,x0),i)
-(Φ::Flow)(x0::LocalTensor,i::AbstractIntegrator=integrator(Φ)) = Flow(system(Φ),duration(Φ)+base(x0))(fiber(x0),i)
-
-function (Φ::Flow)(x0,n::Int,i::AbstractIntegrator=integrator(Φ))
-    out = Vector{typeof(x0)}(undef,n)
-    out[1] = localfiber(x0)
-    for i ∈ 2:n
-        out[i] = localfiber(Φ(out[i-1]))
-    end
-    return out
-end
-
-(Φ::Flow)(x0::LocalTensor{B,<:TensorField} where B,i::AbstractIntegrator=integrator(Φ)) = Φ(fiber(x0),i)
-function (Φ::Flow)(x0::TensorField,i::AbstractIntegrator=integrator(Φ))
-    ϕ = Flow(t -> TensorField(base(fiber(t)),Φ.f.(fiber(fiber(t)))),duration(Φ))
-    odesolve(InitialCondition(ϕ,x0),i)
-end
-
-struct FlowIntegral{F,I<:AbstractIntegrator} <: LieGroup{F}
-    Φ::Flow{F}
-    i::I
-    FlowIntegral(Φ::Flow{F},i::I=integrator(Φ)) where {F,I<:AbstractIntegrator} = new{F,I}(Φ,i)
-end
-
-FlowIntegral(f,tmax,i=ExplicitIntegrator{4}(2^-11)) = FlowIntegral(Flow(f,tmax),i)
-FlowIntegral(f) = FlowIntegral(f,2π)
-
-Flow(Φ::FlowIntegral) = Φ.Φ
-system(Φ::FlowIntegral) = system(Flow(Φ))
-duration(Φ::FlowIntegral) = duration(Flow(Φ))
-integrator(Φ::FlowIntegral) = Φ.i
-
-(Φ::FlowIntegral)(x0) = Flow(Φ)(x0,integrator(Φ))
-
-function (Φ::FlowIntegral)(x0::Vector{<:Chain})
-    out1 = Φ(x0[1])
-    out = Vector{typoef(out1)}(undef,length(x0))
-    out[1] = localfiber(out1)
-    for i ∈ 2:n
-        out[i] = localfiber(Φ(x0[i]))
-    end
-    return out
-end
-
-struct InitialCondition{L<:LieGroup,X}
-    Φ::L
-    x0::X
-    InitialCondition(Φ::L,x0::X) where {L<:LieGroup,X} = new{L,X}(Φ,_init(x0))
-end
-
-const IC = InitialCondition
-InitialCondition(f,x0,tmax) = InitialCondition(Flow(f,tmax),x0)
-InitialCondition(f,x0) = InitialCondition(f,x0,2π)
-
-LieGroup(ic::InitialCondition) = ic.Φ
-system(ic::InitialCondition) = system(LieGroup(ic))
-duration(ic::InitialCondition) = duration(LieGroup(ic))
-parameter(ic::InitialCondition) = ic.x0
-integrator(ic::InitialCondition) = integrator(LieGroup(ic))
-(I::AbstractIntegrator)(ic::InitialCondition) = odesolve(ic,I)
 
 odesolve(ic::InitialCondition) = odesolve(ic,integrator(ic))
 odesolve(f,x0,tmax,tol,m,o=4) = odesolve(f,x0,tmax,tol,Val(m),Val(o))
@@ -401,7 +483,7 @@ function odesolve(ic::InitialCondition,I::EulerHeunIntegrator,bc=identity)
     t = TimeStep(I)
     x = initsteps(parameter(ic),t,duration(ic),Val(true),bc)
     for i ∈ 2:size(x)[end]
-        assign!(x,i,bc(heun(extract(x,i-1),system(ic),step(t))))
+        assign!(x,i,bc(heun(extract(x,i-1),LieGroup(ic),step(t))))
     end
     return x
 end
@@ -413,13 +495,13 @@ function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o},bc=identity) whe
         xi = bc(LocalTensor(base(xi),fiber(xi)))
         n = Int(round((duration(ic)-point(xi))/stp))
         for i ∈ 2:abs(n)+1
-            xi = bc(LocalTensor(point(xi)+sign(n)*stp,explicit(xi,system(ic),sign(n)*stp,B)))
+            xi = bc(LocalTensor(point(xi)+sign(n)*stp,explicit(xi,LieGroup(ic),sign(n)*stp,B)))
         end
         return xi
     elseif isone(I.skip) # full allocations
         x = initsteps(parameter(ic),t,duration(ic),Val(true),bc)
         for i ∈ 2:size(x)[end]
-            assign!(x,i,bc(explicit(extract(x,i-1),system(ic),stp,B)))
+            assign!(x,i,bc(explicit(extract(x,i-1),LieGroup(ic),stp,B)))
         end
         return x
     else # skip some allocations
@@ -428,7 +510,7 @@ function odesolve(ic::InitialCondition,I::ExplicitIntegrator{o},bc=identity) whe
         for i ∈ 2:size(x)[end]
             xi = extract(x,i-1)
             for i ∈ skip
-                xi = bc(LocalTensor(point(xi)+stp,explicit(xi,system(ic),stp,B)))
+                xi = bc(LocalTensor(point(xi)+stp,explicit(xi,LieGroup(ic),stp,B)))
             end
             assign!(x,i,fiber(xi))
         end
@@ -439,13 +521,14 @@ function odesolve(ic::InitialCondition,I::ExplicitAdaptor{o}) where o
     t,B = TimeStep(I),Val(o)
     x = initsteps(parameter(ic),t,duration(ic),Val(false))
     while timeloop!(x,t,duration(ic))
-        explicit!(x,system(ic),t,B)
+        explicit!(x,LieGroup(ic),t,B)
     end
     return resize(x)
 end
 function odesolve(ic::InitialCondition,I::MultistepIntegrator{o},bc=identity) where o
     t,B = TimeStep(I.tol),Val(o)
     stp = step(t)
+    f = LieGroup(ic)
     if iszero(I.skip) # don't allocate
         xi = init(parameter(ic),t)
         xi = bc(LocalTensor(base(xi),fiber(xi)))
@@ -453,23 +536,23 @@ function odesolve(ic::InitialCondition,I::MultistepIntegrator{o},bc=identity) wh
         n = Int(round((duration(ic)-point(xi))/stp))
         pxi = point(xi)+(o-1)*sign(n)*stp
         for i ∈ o+1:abs(n)+1 # o+1 changed to o
-            xi = bc(LocalTensor(pxi+sign(n)*stp,predictcorrect(xi,system(ic),fx,t,B)))
+            xi = bc(LocalTensor(pxi+sign(n)*stp,predictcorrect(xi,f,fx,t,B)))
             pxi = point(xi)
         end
         return xi
     elseif isone(I.skip) # full allocations
-        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B,bc)
+        x,fx = initsteps(parameter(ic),t,duration(ic),f,Val(true),B,bc)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
-            assign!(x,i,fiber(bc(predictcorrect(x,system(ic),fx,t,B))))
+            assign!(x,i,fiber(bc(predictcorrect(x,f,fx,t,B))))
         end
         return x
     else # skip some allocations
-        x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(true),B,bc)
+        x,fx = initsteps(parameter(ic),t,duration(ic),f,Val(true),B,bc)
         skip = list(1,I.skip)
         for i ∈ o+1:size(x)[end] # o+1 changed to o
             xi = extract(x,i-1)
             for j ∈ skip
-                xi = bc(LocalTensor(point(xi)+stp,predictcorrect(xi,system(ic),fx,t,B)))
+                xi = bc(LocalTensor(point(xi)+stp,predictcorrect(xi,f,fx,t,B)))
             end
             assign!(x,i,fiber(xi))
         end
@@ -478,9 +561,10 @@ function odesolve(ic::InitialCondition,I::MultistepIntegrator{o},bc=identity) wh
 end
 function odesolve(ic::InitialCondition,I::MultistepAdaptor{o}) where o
     t,B = TimeStep(I),Val(o)
-    x,fx = initsteps(parameter(ic),t,duration(ic),system(ic),Val(false),B)
+    f = LieGroup(ic)
+    x,fx = initsteps(parameter(ic),t,duration(ic),f,Val(false),B)
     while timeloop!(x,t,duration(ic),B) # o+1 fix??
-        predictcorrect!(x,system(ic),fx,t,B)
+        predictcorrect!(x,f,fx,t,B)
     end
     return resize(x)
 end
@@ -534,37 +618,6 @@ geosolve(ic::InitialCondition,i::AbstractIntegrator=integrator(ic)) = getindex.(
 geosolve(Γ,x0,v0,tmax,tol,m,o=4) = geosolve(Γ,x0,v0,tmax,tol,Val(m),Val(o))
 function geosolve(Γ,x0,v0,tmax=2π,tol=15,M::Val{m}=Val(1),B::Val{o}=Val(4)) where {m,o}
     getindex.(odesolve(geodesic(Γ),Chain(x0,v0),tmax,tol,M,B),1)
-end
-
-export fixedpoint, fixedpointerror, errornorm
-
-errornorm(a::Number,b::Number,ϵ=5eps()) = norm(a-b)
-errornorm(a::TensorField,b::TensorField,ϵ=5eps()) = norm(fiber(a-b),Inf)
-fixedpointerror(f,x,ϵ=5eps()) = fixedpoint(f,x,ϵ,Val(true))
-fixedpoint(f,x,n::Int) = fixedpoint(f,x,1:n)
-function fixedpoint(f,x,n::AbstractVector{Int},::Val{print}=Val(false)) where print
-    print && (out = zeros(length(n)))
-    for i ∈ n
-        if print
-            xi = f(x)
-            out[i] = errornorm(xi,x)
-            x = xi
-        else
-            x = f(x)
-        end
-    end
-    return print ? (x,out) : x
-end
-function fixedpoint(f,x,ϵ=5eps(),::Val{print}=Val(false)) where print
-    change = 5ϵ
-    print && (out = Float64[])
-    while change > ϵ
-        xi = f(x)
-        change = errornorm(xi,x)
-        print && push!(out,change)
-        x = xi
-    end
-    return print ? (x,out) : x
 end
 
 export LeapIntegrator, LeapCondition, leap
