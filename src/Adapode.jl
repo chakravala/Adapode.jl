@@ -39,6 +39,7 @@ export Limit, orbit, orbithold, orbiterror, residual, supnorm
 
 include("constants.jl")
 include("element.jl")
+include("grid.jl")
 
 export AbstractIntegrator, StepIntegrator, AdaptiveIntegrator
 export EulerHeunIntegrator, ExplicitIntegrator, ExplicitAdaptor
